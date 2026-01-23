@@ -1,14 +1,28 @@
 """Profit calculation API"""
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from typing import Optional, List
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import or_
 from pydantic import BaseModel
 from datetime import datetime
+import json
+import os
 from app.database import get_db
 from app.middleware.auth_middleware import require_auth
-from app.models.listing import ListingPool, ProfitCalculation
+from app.models.listing import ListingPool, ProfitCalculation, ListingStatus
+from app.models.monitor_pool import MonitorPool
+from app.models.product import FilterPool
+from app.models.user import User
 from app.services.permission import require_product_edit_permission
 from app.services.operation_log_service import create_operation_log
+
+# #region agent log
+try:
+    log_path = r'd:\emag_erp\.cursor\debug.log'
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"A","location":"profit.py:17","message":"Module import started","data":{"module":"profit"},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+except: pass
+# #endregion
 
 router = APIRouter(prefix="/api/profit", tags=["profit"])
 
@@ -24,6 +38,18 @@ class ProfitCalculationRequest(BaseModel):
     storage_fee: Optional[float] = None
     platform_commission: Optional[float] = None
     vat: Optional[float] = None
+    chinese_name: Optional[str] = None
+    model_number: Optional[str] = None
+    category_name: Optional[str] = None
+
+    model_config = {"protected_namespaces": ()}
+
+# #region agent log
+try:
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"A","location":"profit.py:33","message":"ProfitCalculationRequest class defined","data":{"has_model_number":True},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+except: pass
+# #endregion
 
 class ProfitCalculationResponse(BaseModel):
     """Profit calculation response model"""
@@ -41,10 +67,62 @@ class ProfitCalculationResponse(BaseModel):
     vat: Optional[float]
     profit_margin: Optional[float]
     profit_amount: Optional[float]
+    chinese_name: Optional[str] = None
+    model_number: Optional[str] = None
+    category_name: Optional[str] = None
     calculated_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = {"protected_namespaces": (), "from_attributes": True}
+
+# #region agent log
+try:
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"B","location":"profit.py:74","message":"ProfitCalculationResponse class fixed","data":{"has_model_config":True,"has_from_attributes":True},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+except: pass
+# #endregion
+
+# #region agent log
+try:
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"B","location":"profit.py:56","message":"ProfitCalculationResponse class defined","data":{"has_model_number":True},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+except: pass
+# #endregion
+
+class ProfitListResponse(BaseModel):
+    """Profit calculation list item response model"""
+    id: int
+    listing_pool_id: int
+    operator_name: Optional[str] = None
+    competitor_image: Optional[str] = None
+    product_name_ro: Optional[str] = None
+    chinese_name: Optional[str] = None
+    model_number: Optional[str] = None
+    profit_amount: Optional[float] = None
+    profit_margin: Optional[float] = None
+    profit_margin_without_vat: Optional[float] = None
+    category_name: Optional[str] = None
+    platform_commission: Optional[float] = None
+    platform_commission_amount: Optional[float] = None
+    domestic_logistics: Optional[float] = None
+    shipping_cost: Optional[float] = None
+    status: str
+    created_at: str
+
+    model_config = {"protected_namespaces": ()}
+
+# #region agent log
+try:
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"C","location":"profit.py:77","message":"ProfitListResponse class defined","data":{"has_model_number":True},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+except: pass
+# #endregion
+
+class ProfitListResponseWrapper(BaseModel):
+    """Profit calculation list response wrapper"""
+    items: list[ProfitListResponse]
+    total: int
+    page: int
+    page_size: int
 
 def calculate_profit(
     listing_pool_id: int,
@@ -55,15 +133,15 @@ def calculate_profit(
     platform_commission: float,
     vat: float,
     db: Session
-) -> tuple[float, float]:
+) -> tuple[float, float, float, float]:
     """
-    Calculate profit amount and margin
-    Returns: (profit_amount, profit_margin)
+    Calculate profit amount, margin, margin without VAT, and platform commission amount
+    Returns: (profit_amount, profit_margin, profit_margin_without_vat, platform_commission_amount)
     """
     # Get product price from filter pool
     listing = db.query(ListingPool).filter(ListingPool.id == listing_pool_id).first()
     if not listing:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0
     
     # Get price from filter pool via monitor pool
     from app.models.monitor_pool import MonitorPool
@@ -78,7 +156,13 @@ def calculate_profit(
                 price = filter_product.price
     
     if not price:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0
+    
+    # Calculate platform commission amount
+    platform_commission_amount = price * (platform_commission / 100) if platform_commission else 0.0
+    
+    # Calculate VAT amount
+    vat_amount = price * (vat / 100) if vat else 0.0
     
     # Calculate total costs
     total_costs = (
@@ -86,15 +170,19 @@ def calculate_profit(
         shipping_cost +
         order_fee +
         storage_fee +
-        platform_commission +
-        vat
+        platform_commission_amount +
+        vat_amount
     )
     
     # Calculate profit
     profit_amount = price - total_costs
     profit_margin = (profit_amount / price * 100) if price > 0 else 0.0
     
-    return profit_amount, profit_margin
+    # Calculate profit margin without VAT
+    price_without_vat = price - vat_amount
+    profit_margin_without_vat = (profit_amount / price_without_vat * 100) if price_without_vat > 0 else 0.0
+    
+    return profit_amount, profit_margin, profit_margin_without_vat, platform_commission_amount
 
 # Fee settings endpoints must be defined BEFORE /{listing_id} to avoid path matching conflicts
 class FeeSettingsRequest(BaseModel):
@@ -130,6 +218,257 @@ async def get_fee_settings(
     
     
     return FeeSettingsResponse(**_fee_settings)
+
+@router.get("", response_model=ProfitListResponseWrapper)
+async def get_profit_list(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: Optional[str] = None,
+    operator_id: Optional[int] = None,
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """Get profit calculation list"""
+    from app.services.permission import is_admin
+    
+    # #region agent log
+    try:
+        user_is_admin = is_admin(db, current_user["id"])
+        total_profit_calc_count = db.query(ProfitCalculation).count()
+        total_listing_count = db.query(ListingPool).count()
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"F","location":"profit.py:231","message":"get_profit_list called","data":{"page":page,"page_size":page_size,"status":status,"operator_id":operator_id,"user_id":current_user["id"],"is_admin":user_is_admin,"total_profit_calc_count":total_profit_calc_count,"total_listing_count":total_listing_count},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    # Build query - use LEFT JOIN to show all listings, even without profit calculations
+    # This allows showing listings that haven't been calculated yet
+    query = db.query(ListingPool).outerjoin(ProfitCalculation, ListingPool.id == ProfitCalculation.listing_pool_id)
+    
+    # #region agent log
+    try:
+        # Check how many listings have each status
+        pending_count = db.query(ListingPool).filter(ListingPool.status == ListingStatus.PENDING_CALC).count()
+        approved_count = db.query(ListingPool).filter(ListingPool.status == ListingStatus.APPROVED).count()
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"G","location":"profit.py:250","message":"ListingPool status counts","data":{"pending_count":pending_count,"approved_count":approved_count},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    # Filter to only show listings that have profit calculations OR are pending calculation
+    # This ensures we show listings that are ready for profit calculation
+    query = query.filter(
+        or_(
+            ProfitCalculation.id.isnot(None),  # Has profit calculation
+            ListingPool.status == ListingStatus.PENDING_CALC  # Or is pending calculation
+        )
+    )
+    
+    # #region agent log
+    try:
+        query_count_before_filter = query.count()
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"F","location":"profit.py:234","message":"Query count after join, before user filter","data":{"count":query_count_before_filter},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    # Filter by user if not admin
+    if not is_admin(db, current_user["id"]):
+        query = query.filter(ListingPool.created_by_user_id == current_user["id"])
+        # #region agent log
+        try:
+            query_count_after_user_filter = query.count()
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"F","location":"profit.py:238","message":"Query count after user filter","data":{"count":query_count_after_user_filter,"user_id":current_user["id"]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+    
+    # Filter by status
+    if status:
+        try:
+            listing_status = ListingStatus(status)
+            query = query.filter(ListingPool.status == listing_status)
+            # #region agent log
+            try:
+                query_count_after_status_filter = query.count()
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"F","location":"profit.py:245","message":"Query count after status filter","data":{"count":query_count_after_status_filter,"status":status},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            except: pass
+            # #endregion
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status: {status}"
+            )
+    
+    # Filter by operator
+    if operator_id:
+        query = query.filter(ListingPool.created_by_user_id == operator_id)
+    
+    # Get total count (before pagination)
+    total = query.count()
+    
+    # #region agent log
+    try:
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"F","location":"profit.py:256","message":"Final query count before pagination","data":{"total":total},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    # Apply pagination
+    skip = (page - 1) * page_size
+    listings = query.options(
+        joinedload(ListingPool.profit_calc),
+        joinedload(ListingPool.user)
+    ).order_by(ListingPool.created_at.desc()).offset(skip).limit(page_size).all()
+    
+    # Build response items
+    items = []
+    # #region agent log
+    try:
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"A","location":"profit.py:265","message":"Starting to build profit list items","data":{"listings_count":len(listings),"total":total},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    for listing in listings:
+        calc = listing.profit_calc
+        
+        # If no profit calculation exists, create a placeholder with listing_pool_id
+        # This allows displaying listings that haven't been calculated yet
+        if not calc:
+            # #region agent log
+            try:
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"G","location":"profit.py:325","message":"Listing without profit calc, creating placeholder","data":{"listing_id":listing.id,"status":listing.status.value if hasattr(listing.status, 'value') else str(listing.status)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            except: pass
+            # #endregion
+            # Create a placeholder ProfitCalculation object for display
+            # We'll use listing.id as a temporary id, but the actual calc_id will be None
+            # Note: We need to handle this in the response model
+            pass  # We'll handle this case by creating a minimal response item
+        
+        # Get product info via monitor pool
+        competitor_image = None
+        product_name_ro = None
+        price = None
+        
+        # #region agent log
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"A","location":"profit.py:277","message":"Checking listing monitor_pool_id","data":{"listing_id":listing.id,"monitor_pool_id":listing.monitor_pool_id},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        if listing.monitor_pool_id:
+            monitor = db.query(MonitorPool).filter(MonitorPool.id == listing.monitor_pool_id).first()
+            # #region agent log
+            try:
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"B","location":"profit.py:279","message":"MonitorPool query result","data":{"listing_id":listing.id,"monitor_pool_id":listing.monitor_pool_id,"monitor_found":monitor is not None,"monitor_filter_pool_id":monitor.filter_pool_id if monitor else None},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            except: pass
+            # #endregion
+            if monitor and monitor.filter_pool_id:
+                filter_product = db.query(FilterPool).filter(FilterPool.id == monitor.filter_pool_id).first()
+                # #region agent log
+                try:
+                    with open(log_path, 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"C","location":"profit.py:280","message":"FilterPool query result","data":{"listing_id":listing.id,"filter_pool_id":monitor.filter_pool_id,"filter_product_found":filter_product is not None,"product_name":filter_product.product_name if filter_product else None,"thumbnail_image":filter_product.thumbnail_image if filter_product else None,"price":filter_product.price if filter_product else None},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                except: pass
+                # #endregion
+                if filter_product:
+                    competitor_image = filter_product.thumbnail_image
+                    product_name_ro = filter_product.product_name
+                    price = filter_product.price
+            else:
+                # #region agent log
+                try:
+                    with open(log_path, 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"B","location":"profit.py:285","message":"MonitorPool missing or no filter_pool_id","data":{"listing_id":listing.id,"monitor_pool_id":listing.monitor_pool_id,"monitor_exists":monitor is not None,"filter_pool_id":monitor.filter_pool_id if monitor else None},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                except: pass
+                # #endregion
+        else:
+            # #region agent log
+            try:
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"A","location":"profit.py:287","message":"ListingPool has no monitor_pool_id","data":{"listing_id":listing.id,"monitor_pool_id":None},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            except: pass
+            # #endregion
+        
+        # Calculate derived fields
+        profit_margin_without_vat = None
+        platform_commission_amount = None
+        
+        if calc and calc.platform_commission is not None and price:
+            platform_commission_amount = price * (calc.platform_commission / 100)
+            
+            if calc.vat is not None:
+                vat_amount = price * (calc.vat / 100)
+                price_without_vat = price - vat_amount
+                if price_without_vat > 0 and calc.profit_amount is not None:
+                    profit_margin_without_vat = (calc.profit_amount / price_without_vat * 100)
+        
+        # #region agent log
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"D","location":"profit.py:400","message":"Building ProfitListResponse item","data":{"listing_id":listing.id,"calc_id":calc.id if calc else None,"has_calc":calc is not None,"competitor_image":competitor_image,"product_name_ro":product_name_ro,"chinese_name":calc.chinese_name if calc else None,"model_number":calc.model_number if calc else None,"price":price},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        # Handle case where calc is None - use listing.id as temporary id
+        if not calc:
+            # Create a placeholder response for listings without profit calculation
+            items.append(ProfitListResponse(
+                id=-listing.id,  # Use negative id to indicate placeholder
+                listing_pool_id=listing.id,
+                operator_name=listing.user.username if listing.user else None,
+                competitor_image=competitor_image,
+                product_name_ro=product_name_ro,
+                chinese_name=None,
+                model_number=None,
+                profit_amount=None,
+                profit_margin=None,
+                profit_margin_without_vat=None,
+                category_name=None,
+                platform_commission=None,
+                platform_commission_amount=None,
+                domestic_logistics=None,
+                shipping_cost=None,
+                status=listing.status.value if hasattr(listing.status, 'value') else str(listing.status),
+                created_at=listing.created_at.isoformat() if listing.created_at else ""
+            ))
+        else:
+            items.append(ProfitListResponse(
+                id=calc.id,
+                listing_pool_id=calc.listing_pool_id,
+                operator_name=listing.user.username if listing.user else None,
+                competitor_image=competitor_image,
+                product_name_ro=product_name_ro,
+                chinese_name=calc.chinese_name,
+                model_number=calc.model_number,
+                profit_amount=calc.profit_amount,
+                profit_margin=calc.profit_margin,
+                profit_margin_without_vat=profit_margin_without_vat,
+                category_name=calc.category_name,
+                platform_commission=calc.platform_commission,
+                platform_commission_amount=platform_commission_amount,
+                domestic_logistics=calc.shipping_cost,
+                shipping_cost=calc.shipping_cost,
+                status=listing.status.value if hasattr(listing.status, 'value') else str(listing.status),
+                created_at=listing.created_at.isoformat() if listing.created_at else ""
+            ))
+    
+    # #region agent log
+    try:
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"initial","hypothesisId":"D","location":"profit.py:319","message":"Returning profit list response","data":{"items_count":len(items),"total":total,"page":page,"page_size":page_size},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    return ProfitListResponseWrapper(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size
+    )
 
 @router.put("/fee-settings", response_model=FeeSettingsResponse)
 async def update_fee_settings(
@@ -233,6 +572,12 @@ async def create_profit_calculation(
         calc.platform_commission = request.platform_commission
     if request.vat is not None:
         calc.vat = request.vat
+    if request.chinese_name is not None:
+        calc.chinese_name = request.chinese_name
+    if request.model_number is not None:
+        calc.model_number = request.model_number
+    if request.category_name is not None:
+        calc.category_name = request.category_name
     
     # Calculate profit if all required fields are present
     if (
@@ -243,7 +588,7 @@ async def create_profit_calculation(
         calc.platform_commission is not None and
         calc.vat is not None
     ):
-        profit_amount, profit_margin = calculate_profit(
+        profit_amount, profit_margin, profit_margin_without_vat, platform_commission_amount = calculate_profit(
             listing_id=listing_id,
             purchase_price=calc.purchase_price,
             shipping_cost=calc.shipping_cost or 0,
@@ -288,3 +633,47 @@ async def update_profit_calculation(
     require_product_edit_permission(db, listing_id, current_user["id"])
     
     return await create_profit_calculation(listing_id, request, current_user, db)
+
+@router.put("/{listing_id}/reject", response_model=dict)
+async def reject_profit_calculation(
+    listing_id: int,
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """Reject profit calculation (mark as rejected)"""
+    listing = db.query(ListingPool).filter(ListingPool.id == listing_id).first()
+    if not listing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Listing not found"
+        )
+    
+    # Check permission
+    if listing.created_by_user_id != current_user["id"]:
+        from app.services.permission import is_admin
+        if not is_admin(db, current_user["id"]):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to reject this profit calculation"
+            )
+    
+    # Update status to REJECTED
+    old_status = listing.status
+    listing.status = ListingStatus.REJECTED
+    db.commit()
+    db.refresh(listing)
+    
+    # Log operation
+    create_operation_log(
+        db=db,
+        user_id=current_user["id"],
+        operation_type="profit_reject",
+        target_type="listing_pool",
+        target_id=listing_id,
+        operation_detail={
+            "old_status": old_status.value if hasattr(old_status, 'value') else str(old_status),
+            "new_status": "rejected"
+        }
+    )
+    
+    return {"message": "Profit calculation rejected successfully", "status": "rejected"}

@@ -12,6 +12,7 @@ class ListingStatus(str, enum.Enum):
     APPROVED = "approved"  # 已通过
     LISTED = "listed"  # 已上架
     PURCHASED = "purchased"  # 已采购
+    REJECTED = "rejected"  # 已放弃
 
 
 class ListingPool(Base):
@@ -53,6 +54,9 @@ class ProfitCalculation(Base):
     vat = Column(Float, nullable=True)
     profit_margin = Column(Float, nullable=True)
     profit_amount = Column(Float, nullable=True)
+    chinese_name = Column(String, nullable=True)  # 中文名
+    model_number = Column(String, nullable=True)  # 型号
+    category_name = Column(String, nullable=True)  # 类目名称
     calculated_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships
