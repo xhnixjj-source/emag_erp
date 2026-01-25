@@ -63,6 +63,7 @@
         v-loading="loading"
         @selection-change="handleSelectionChange"
         style="width: 100%"
+        height="calc(100vh - 450px)"
       >
         <el-table-column type="selection" width="55" />
         <el-table-column prop="id" label="ID" width="80" />
@@ -101,7 +102,7 @@
         @current-change="loadLinks"
         @size-change="loadLinks"
         layout="total, sizes, prev, pager, next, jumper"
-        style="margin-top: 20px"
+        style="margin-top: 20px; flex-shrink: 0;"
       />
     </el-card>
   </div>

@@ -22,6 +22,7 @@
         v-loading="loading" 
         @selection-change="handleSelectionChange"
         style="width: 100%"
+        height="calc(100vh - 350px)"
       >
         <el-table-column type="selection" width="55" />
         <el-table-column label="缩略图" width="80">
@@ -97,7 +98,7 @@
         :total="total"
         @current-change="loadProducts"
         layout="total, prev, pager, next"
-        style="margin-top: 20px"
+        style="margin-top: 20px; flex-shrink: 0;"
       />
     </el-card>
 

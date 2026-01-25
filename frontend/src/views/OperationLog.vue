@@ -85,7 +85,7 @@
       </el-form>
 
       <!-- 日志列表 -->
-      <el-table :data="logs" v-loading="loading" style="width: 100%" stripe>
+      <el-table :data="logs" v-loading="loading" style="width: 100%" stripe height="calc(100vh - 450px)">
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column label="用户" width="150">
           <template #default="{ row }">
@@ -154,7 +154,7 @@
         @current-change="handlePageChange"
         @size-change="handleSizeChange"
         layout="total, sizes, prev, pager, next, jumper"
-        style="margin-top: 20px; justify-content: flex-end;"
+        style="margin-top: 20px; justify-content: flex-end; flex-shrink: 0;"
       />
     </el-card>
   </div>

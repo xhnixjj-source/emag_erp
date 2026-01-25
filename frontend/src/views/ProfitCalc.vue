@@ -32,6 +32,7 @@
         v-loading="loading"
         style="width: 100%"
         :row-class-name="getRowClassName"
+        height="calc(100vh - 400px)"
       >
         <el-table-column prop="operator_name" label="操作人" width="120" />
         <el-table-column label="竞品图片" width="100">
@@ -155,7 +156,7 @@
         @current-change="loadProfitList"
         @size-change="loadProfitList"
         layout="total, sizes, prev, pager, next, jumper"
-        style="margin-top: 20px"
+        style="margin-top: 20px; flex-shrink: 0;"
       />
     </el-card>
 

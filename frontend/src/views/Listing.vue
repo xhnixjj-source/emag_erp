@@ -25,7 +25,7 @@
       </el-form>
 
       <!-- 产品列表 -->
-      <el-table :data="products" v-loading="loading" style="width: 100%">
+      <el-table :data="products" v-loading="loading" style="width: 100%" height="calc(100vh - 400px)">
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="product_url" label="产品链接" show-overflow-tooltip min-width="300" />
         <el-table-column prop="status" label="状态" width="120">
@@ -76,7 +76,7 @@
         @current-change="loadProducts"
         @size-change="loadProducts"
         layout="total, sizes, prev, pager, next, jumper"
-        style="margin-top: 20px"
+        style="margin-top: 20px; flex-shrink: 0;"
       />
     </el-card>
 

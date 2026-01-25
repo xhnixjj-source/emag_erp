@@ -28,7 +28,7 @@
 
       <div class="keywords-list">
         <h3>关键字列表</h3>
-        <el-table :data="keywords" style="width: 100%" v-loading="loading">
+        <el-table :data="keywords" style="width: 100%" v-loading="loading" height="calc(100vh - 350px)">
           <el-table-column prop="id" label="ID" width="80" />
           <el-table-column prop="keyword" label="关键字" />
           <el-table-column prop="status" label="状态" width="120">
