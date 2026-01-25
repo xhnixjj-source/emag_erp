@@ -298,7 +298,11 @@ class ProductDataCrawler:
             # 检查验证码
             page_content = page.content()
             if captcha_handler.detect_captcha(page_content, page_content):
-                logger.warning(f"[验证码检测] 检测到验证码 - URL: {product_url}")
+                logger.warning(f"[验证码检测] 检测到验证码 - URL: {product_url}, 代理: {proxy_str if proxy_str else '无'}")
+                # 标记当前代理失败，以便重试时使用新代理
+                if proxy_str:
+                    proxy_manager.mark_proxy_failed(proxy_str)
+                    logger.warning(f"[代理标记失败] 验证码检测，标记代理为失败 - 代理: {proxy_str}")
                 if task_id and db:
                     captcha_handler.handle_captcha(
                         task_id,
@@ -306,8 +310,8 @@ class ProductDataCrawler:
                         response_text=page_content[:1000],
                         db=db
                     )
-                # 验证码检测不抛出异常，返回空字典
-                return {}
+                # 抛出异常，让 retry_manager 处理重试（会使用新的代理IP）
+                raise ValueError(f"Captcha detected for {product_url}")
             
             # 提取基础信息
             if extract_base_info:

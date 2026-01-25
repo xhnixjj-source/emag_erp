@@ -123,9 +123,11 @@ class RetryManager:
         if error_type is None:
             error_type = self.classify_error(error)
         
-        # Captcha errors should not auto-retry (handled separately)
+        # 验证码错误：允许重试（切换代理后可能可以绕过验证码）
+        # 但限制重试次数，避免无限重试
         if error_type == ErrorType.CAPTCHA:
-            return False
+            # 验证码错误最多重试 max_retries 次（通过切换代理）
+            return True
         
         return True
     
@@ -156,6 +158,10 @@ class RetryManager:
         elif error_type == ErrorType.DISCONNECT:
             # Disconnect errors: immediate retry with short delay
             return min(base_delay, 2.0)
+        elif error_type == ErrorType.CAPTCHA:
+            # Captcha errors: longer delay before retry (allow time for proxy rotation)
+            # 验证码错误：使用较长的延迟，给代理切换留出时间
+            return min(base_delay * 2.0, 10.0)  # 最多等待10秒
         else:
             # Other errors: standard exponential backoff
             return base_delay
