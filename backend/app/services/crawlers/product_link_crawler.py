@@ -101,6 +101,7 @@ class ProductLinkCrawler:
                         page_num,
                         encoded_keyword,
                         context,
+                        proxy_str,  # 传递代理字符串，用于标记失败代理
                         task_id,
                         db
                     )
@@ -127,7 +128,15 @@ class ProductLinkCrawler:
                     
                 except Exception as e:
                     page_elapsed = time.time() - page_start_time
-                    logger.warning(f"[爬取页面失败] 第 {page_num}/{max_pages} 页爬取失败 - 关键字: {keyword}, 错误: {str(e)}, 耗时: {page_elapsed:.2f}秒")
+                    error_msg = str(e)
+                    
+                    # 如果是验证码异常，重新抛出以触发整个任务的重试（使用新代理）
+                    if isinstance(e, ValueError) and "Captcha detected" in error_msg:
+                        logger.warning(f"[验证码异常] 第 {page_num}/{max_pages} 页检测到验证码，将触发整个任务重试 - 关键字: {keyword}, 耗时: {page_elapsed:.2f}秒")
+                        raise  # 重新抛出异常，让 retry_manager 处理重试
+                    
+                    # 其他异常：记录日志并继续爬取下一页
+                    logger.warning(f"[爬取页面失败] 第 {page_num}/{max_pages} 页爬取失败 - 关键字: {keyword}, 错误: {error_msg}, 耗时: {page_elapsed:.2f}秒")
                     
                     
                     # 继续爬取下一页，不中断整个任务
@@ -168,6 +177,7 @@ class ProductLinkCrawler:
         page: int,
         encoded_keyword: str,
         context,
+        proxy_str: Optional[str] = None,
         task_id: Optional[int] = None,
         db: Optional[Session] = None
     ) -> List[Dict[str, Any]]:
@@ -179,6 +189,7 @@ class ProductLinkCrawler:
             page: 页码（从1开始）
             encoded_keyword: URL编码后的关键字
             context: BrowserContext对象
+            proxy_str: 代理字符串（用于标记失败代理）
             task_id: 任务ID
             db: 数据库会话
             
@@ -217,7 +228,11 @@ class ProductLinkCrawler:
             page_content = page_obj.content()
             
             if captcha_handler.detect_captcha(page_content, page_content):
-                logger.warning(f"[验证码检测] 检测到验证码 - 关键字: {keyword}, 页码: {page}, URL: {search_url}")
+                logger.warning(f"[验证码检测] 检测到验证码 - 关键字: {keyword}, 页码: {page}, URL: {search_url}, 代理: {proxy_str if proxy_str else '无'}")
+                # 标记当前代理失败，以便重试时使用新代理
+                if proxy_str:
+                    proxy_manager.mark_proxy_failed(proxy_str)
+                    logger.warning(f"[代理标记失败] 验证码检测，标记代理为失败 - 代理: {proxy_str}")
                 if task_id and db:
                     captcha_handler.handle_captcha(
                         task_id,
@@ -225,8 +240,8 @@ class ProductLinkCrawler:
                         response_text=page_content[:1000],
                         db=db
                     )
-                # 验证码检测不抛出异常，返回空列表
-                return []
+                # 抛出异常，让 retry_manager 处理重试（会使用新的代理IP）
+                raise ValueError(f"Captcha detected for keyword '{keyword}', page {page}")
             
             # 使用提取器提取产品链接
             extract_start = time.time()
