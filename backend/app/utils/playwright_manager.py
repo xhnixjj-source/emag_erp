@@ -329,18 +329,137 @@ class PlaywrightContextPool:
                 proxy_dict = self._format_proxy(proxy)
                 if proxy_dict:
                     context_options['proxy'] = proxy_dict
+                    # #region agent log
+                    try:
+                        import json
+                        debug_log_path = _get_debug_log_path()
+                        with open(debug_log_path, 'a', encoding='utf-8') as f:
+                            log_entry = {
+                                "sessionId": "debug-session",
+                                "runId": "run2",
+                                "hypothesisId": "G",
+                                "location": "playwright_manager.py:_create_context",
+                                "message": "代理配置已添加到上下文选项",
+                                "data": {"proxy": proxy, "proxy_dict": proxy_dict},
+                                "timestamp": int(time.time() * 1000)
+                            }
+                            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
             
             # 获取或初始化当前线程的Playwright和Browser实例
             # 每个线程有独立的实例，避免greenlet跨线程切换问题
+            context_create_start = time.time()
             _, browser = self._get_or_init_playwright(
                 require_proxy=bool(proxy),
                 proxy_server=proxy
             )
             
+            # #region agent log
+            try:
+                import json
+                debug_log_path = _get_debug_log_path()
+                with open(debug_log_path, 'a', encoding='utf-8') as f:
+                    log_entry = {
+                        "sessionId": "debug-session",
+                        "runId": "run2",
+                        "hypothesisId": "G",
+                        "location": "playwright_manager.py:_create_context",
+                        "message": "浏览器实例获取完成",
+                        "data": {
+                            "proxy": proxy,
+                            "elapsed_time": time.time() - context_create_start,
+                            "has_browser": browser is not None
+                        },
+                        "timestamp": int(time.time() * 1000)
+                    }
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
+            
             
             try:
                 context = browser.new_context(**context_options)
+
+                # 在上下文层面统一屏蔽静态资源，减少带宽占用并提升加载速度
+                def _should_block(route_request) -> bool:
+                    r_type = route_request.resource_type
+                    url = route_request.url
+                    # 屏蔽图片 / 媒体 / 字体 / 样式表等静态资源
+                    if r_type in ("image", "media", "font", "stylesheet"):
+                        return True
+                    # 可选：屏蔽常见广告和统计域名（如后续需要可扩展）
+                    block_keywords = [
+                        "doubleclick.net",
+                        "googlesyndication.com",
+                        "google-analytics.com",
+                        "facebook.net",
+                    ]
+                    for kw in block_keywords:
+                        if kw in url:
+                            return True
+                    return False
+
+                def _route_handler(route):
+                    try:
+                        if _should_block(route.request):
+                            return route.abort()
+                    except Exception:
+                        # 出现异常时回退为正常放行，避免影响主流程
+                        pass
+                    return route.continue_()
+
+                # 对该上下文下的所有页面生效
+                context.route("**/*", _route_handler)
+
+                # #region agent log
+                try:
+                    import json
+                    debug_log_path = _get_debug_log_path()
+                    with open(debug_log_path, 'a', encoding='utf-8') as f:
+                        log_entry = {
+                            "sessionId": "debug-session",
+                            "runId": "run2",
+                            "hypothesisId": "G",
+                            "location": "playwright_manager.py:_create_context",
+                            "message": "浏览器上下文创建成功",
+                            "data": {
+                                "proxy": proxy,
+                                "has_proxy_in_options": "proxy" in context_options,
+                                "total_elapsed": time.time() - context_create_start
+                            },
+                            "timestamp": int(time.time() * 1000)
+                        }
+                        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
             except Exception as e:
+                # #region agent log
+                try:
+                    import json
+                    debug_log_path = _get_debug_log_path()
+                    with open(debug_log_path, 'a', encoding='utf-8') as f:
+                        log_entry = {
+                            "sessionId": "debug-session",
+                            "runId": "run2",
+                            "hypothesisId": "G",
+                            "location": "playwright_manager.py:_create_context",
+                            "message": "浏览器上下文创建失败",
+                            "data": {
+                                "proxy": proxy,
+                                "error_type": type(e).__name__,
+                                "error_message": str(e),
+                                "elapsed_time": time.time() - context_create_start
+                            },
+                            "timestamp": int(time.time() * 1000)
+                        }
+                        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 raise
             context.set_default_timeout(config.PLAYWRIGHT_TIMEOUT)
             context.set_default_navigation_timeout(config.PLAYWRIGHT_NAVIGATION_TIMEOUT)
@@ -404,12 +523,33 @@ class PlaywrightContextPool:
         if not proxy:
             return None
         
+        # #region agent log
+        try:
+            import json
+            debug_log_path = _get_debug_log_path()
+            with open(debug_log_path, 'a', encoding='utf-8') as f:
+                log_entry = {
+                    "sessionId": "debug-session",
+                    "runId": "post-fix",
+                    "hypothesisId": "A",
+                    "location": "playwright_manager.py:_format_proxy",
+                    "message": "格式化代理前 - 输入参数",
+                    "data": {"proxy": proxy, "has_at_symbol": "@" in proxy},
+                    "timestamp": int(time.time() * 1000)
+                }
+                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        
         try:
             # 处理不同格式的代理
+            # 统一使用配置的 PROXY_SCHEME（例如 socks5），支持 SOCKS 代理
             if '://' in proxy:
                 proxy_url = proxy
             else:
-                proxy_url = f"http://{proxy}"
+                scheme = getattr(config, "PROXY_SCHEME", "socks5")
+                proxy_url = f"{scheme}://{proxy}"
 
             from urllib.parse import urlparse
             parsed = urlparse(proxy_url)
@@ -421,10 +561,54 @@ class PlaywrightContextPool:
             if parsed.username or parsed.password:
                 proxy_dict["username"] = parsed.username or ""
                 proxy_dict["password"] = parsed.password or ""
+            
+            # #region agent log
+            try:
+                import json
+                debug_log_path = _get_debug_log_path()
+                with open(debug_log_path, 'a', encoding='utf-8') as f:
+                    log_entry = {
+                        "sessionId": "debug-session",
+                        "runId": "post-fix",
+                        "hypothesisId": "A",
+                        "location": "playwright_manager.py:_format_proxy",
+                        "message": "格式化代理后 - 输出结果",
+                        "data": {
+                            "proxy_dict": proxy_dict,
+                            "has_username": "username" in proxy_dict,
+                            "has_password": "password" in proxy_dict,
+                            "username": proxy_dict.get("username", ""),
+                            "parsed_username": parsed.username,
+                            "parsed_password": parsed.password
+                        },
+                        "timestamp": int(time.time() * 1000)
+                    }
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
 
             return proxy_dict
         except Exception as e:
             logger.warning(f"Failed to format proxy {proxy}: {e}")
+            # #region agent log
+            try:
+                import json
+                debug_log_path = _get_debug_log_path()
+                with open(debug_log_path, 'a', encoding='utf-8') as f:
+                    log_entry = {
+                        "sessionId": "debug-session",
+                        "runId": "post-fix",
+                        "hypothesisId": "E",
+                        "location": "playwright_manager.py:_format_proxy",
+                        "message": "代理格式化失败",
+                        "data": {"proxy": proxy, "error": str(e)},
+                        "timestamp": int(time.time() * 1000)
+                    }
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
             return None
     
     def _close_oldest_context(self):

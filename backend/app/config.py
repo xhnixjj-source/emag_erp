@@ -59,6 +59,11 @@ class Config:
     # PROXY_API_KEY：用于Authorization Bearer token认证（Unlocker API必需）
     PROXY_API_TIMEOUT: int = int(os.getenv("PROXY_API_TIMEOUT", "10"))
     PROXY_VALIDATION_TIMEOUT: int = int(os.getenv("PROXY_VALIDATION_TIMEOUT", "5"))
+    # 代理协议类型（http / socks4 / socks5 / socks5h 等）
+    # 注意：
+    # - 使用 socks 协议需要在环境中安装 requests[socks] / PySocks
+    # - 建议使用 socks5 或 socks5h（带域名解析）
+    PROXY_SCHEME: str = os.getenv("PROXY_SCHEME", "socks5")
     
     # Crawler configuration
     CRAWLER_DELAY_MIN: int = int(os.getenv("CRAWLER_DELAY_MIN", "1"))
@@ -101,7 +106,7 @@ class Config:
     PLAYWRIGHT_TIMEOUT: int = int(os.getenv("PLAYWRIGHT_TIMEOUT", "30000"))
     PLAYWRIGHT_MAX_CONTEXTS: int = int(os.getenv("PLAYWRIGHT_MAX_CONTEXTS", "10"))
     PLAYWRIGHT_CONTEXT_TIMEOUT: int = int(os.getenv("PLAYWRIGHT_CONTEXT_TIMEOUT", "60000"))
-    PLAYWRIGHT_NAVIGATION_TIMEOUT: int = int(os.getenv("PLAYWRIGHT_NAVIGATION_TIMEOUT", "30000"))
+    PLAYWRIGHT_NAVIGATION_TIMEOUT: int = int(os.getenv("PLAYWRIGHT_NAVIGATION_TIMEOUT", "60000"))  # 增加到60秒，代理连接可能需要更长时间
     PLAYWRIGHT_CONTEXT_REUSE: bool = os.getenv("PLAYWRIGHT_CONTEXT_REUSE", "true").lower() == "true"
     PLAYWRIGHT_CONTEXT_MAX_REUSE_COUNT: int = int(os.getenv("PLAYWRIGHT_CONTEXT_MAX_REUSE_COUNT", "100"))
     PLAYWRIGHT_HEALTH_CHECK_INTERVAL: int = int(os.getenv("PLAYWRIGHT_HEALTH_CHECK_INTERVAL", "300"))
@@ -120,6 +125,30 @@ class Config:
     # API 刷新间隔（秒），建议 60-120 秒以保持 IP 池新鲜
     # 应小于 PROXY_API_IP_SI（IP有效期）换算成秒数
     PROXY_API_FETCH_INTERVAL: int = int(os.getenv("PROXY_API_FETCH_INTERVAL", "120"))
+
+    # Istoric Preturi 插件后端接口配置
+    # 说明：
+    # - 需要先在浏览器 DevTools 中抓包 Istoric Preturi 插件点击时的网络请求
+    # - 将抓到的实际接口 URL、超时、重试次数等配置到环境变量中
+    # - 本系统后端只负责按配置调用该 HTTP 接口并解析“上架日期”字段
+    # - 具体字段名和路径可通过下面的配置项灵活调整
+    ISTORIC_PRETURI_ENABLED: bool = os.getenv("ISTORIC_PRETURI_ENABLED", "true").lower() == "true"
+    # 完整接口 URL，例如：https://api.istoricpreturi.ro/v1/product
+    ISTORIC_PRETURI_ENDPOINT: str = os.getenv("ISTORIC_PRETURI_ENDPOINT", "")
+    # 调用超时时间（秒）
+    ISTORIC_PRETURI_TIMEOUT: int = int(os.getenv("ISTORIC_PRETURI_TIMEOUT", "10"))
+    # 最大重试次数（独立于全局爬虫重试配置）
+    ISTORIC_PRETURI_MAX_RETRIES: int = int(os.getenv("ISTORIC_PRETURI_MAX_RETRIES", "3"))
+    # 如对方接口需要简单的 API Key / Token，可通过环境变量注入
+    ISTORIC_PRETURI_API_KEY: Optional[str] = os.getenv("ISTORIC_PRETURI_API_KEY", None)
+    # 请求中使用产品 URL 的参数名（如 ?url=xxx 或 ?product_url=xxx）
+    ISTORIC_PRETURI_URL_PARAM: str = os.getenv("ISTORIC_PRETURI_URL_PARAM", "url")
+    # 如果接口需要 pnk_code 而不是完整 URL，可通过该参数名传递（留空则不传）
+    ISTORIC_PRETURI_PNK_PARAM: Optional[str] = os.getenv("ISTORIC_PRETURI_PNK_PARAM", None)
+    # 响应 JSON 中“上架日期”字段的 key（支持嵌套路径，使用点号分隔，如 data.listed_at）
+    ISTORIC_PRETURI_LISTED_AT_PATH: str = os.getenv("ISTORIC_PRETURI_LISTED_AT_PATH", "listed_at")
+    # 接口返回的日期格式（如 %Y-%m-%d），留空则使用内置多格式尝试解析
+    ISTORIC_PRETURI_DATE_FORMAT: Optional[str] = os.getenv("ISTORIC_PRETURI_DATE_FORMAT", None)
 
 
 config = Config()

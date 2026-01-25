@@ -6,7 +6,7 @@ import time
 import json
 import threading
 from typing import Optional, List, Dict
-from app.config import config
+from app.config import config, get_debug_log_path
 
 logger = logging.getLogger(__name__)
 
@@ -280,8 +280,9 @@ class ProxyManager:
         """
         try:
             # 格式化代理 URL
+            # 统一使用配置的 PROXY_SCHEME（例如 socks5），确保与实际代理协议一致
             if "://" not in proxy_str:
-                test_url = f"http://{proxy_str}"
+                test_url = f"{getattr(config, 'PROXY_SCHEME', 'socks5')}://{proxy_str}"
             else:
                 test_url = proxy_str
             
@@ -356,10 +357,13 @@ class ProxyManager:
             self.current_index = (self.current_index + 1) % len(available_proxies)
         
         # 格式化代理
+        # 统一使用配置的 PROXY_SCHEME（默认 socks5），确保 requests 通过 SOCKS 代理访问
+        scheme = getattr(config, "PROXY_SCHEME", "socks5")
         if "://" in proxy_str:
-            return {"http": proxy_str, "https": proxy_str}
+            formatted = proxy_str
         else:
-            return {"http": f"http://{proxy_str}", "https": f"https://{proxy_str}"}
+            formatted = f"{scheme}://{proxy_str}"
+        return {"http": formatted, "https": formatted}
     
     def get_random_proxy(self) -> Optional[dict]:
         """获取随机代理"""
@@ -386,10 +390,33 @@ class ProxyManager:
             proxy_str = random.choice(available_proxies)
         
         # 格式化代理
+        # 与 get_proxy 保持一致，使用 PROXY_SCHEME 生成 SOCKS 代理 URL
+        scheme = getattr(config, "PROXY_SCHEME", "socks5")
         if "://" in proxy_str:
-            return {"http": proxy_str, "https": proxy_str}
+            proxy_dict = {"http": proxy_str, "https": proxy_str}
         else:
-            return {"http": f"http://{proxy_str}", "https": f"https://{proxy_str}"}
+            proxy_dict = {"http": f"{scheme}://{proxy_str}", "https": f"{scheme}://{proxy_str}"}
+        
+        # #region agent log
+        try:
+            import json
+            debug_log_path = get_debug_log_path()
+            with open(debug_log_path, 'a', encoding='utf-8') as f:
+                log_entry = {
+                    "sessionId": "debug-session",
+                    "runId": "run2",
+                    "hypothesisId": "F",
+                    "location": "proxy.py:get_random_proxy",
+                    "message": "代理格式化完成",
+                    "data": {"proxy_str": proxy_str, "proxy_dict": proxy_dict},
+                    "timestamp": int(time.time() * 1000)
+                }
+                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        
+        return proxy_dict
     
     def get_proxy_for_playwright(self) -> Optional[dict]:
         """
@@ -420,8 +447,10 @@ class ProxyManager:
             proxy_str = random.choice(available_proxies)
         
         # Playwright 代理格式
+        # 这里同样尊重 PROXY_SCHEME，统一输出例如 socks5://ip:port
+        scheme = getattr(config, "PROXY_SCHEME", "socks5")
         if "://" not in proxy_str:
-            return {"server": f"http://{proxy_str}"}
+            return {"server": f"{scheme}://{proxy_str}"}
         else:
             return {"server": proxy_str}
     

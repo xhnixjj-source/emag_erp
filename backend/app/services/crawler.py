@@ -17,6 +17,7 @@ from app.utils.captcha_handler import captcha_handler
 from app.utils.thread_pool import thread_pool_manager
 from app.services.retry_manager import retry_manager
 from app.services.crawlers import ProductLinkCrawler, ProductDataCrawler
+from app.services.istoric_preturi_client import get_listed_at as get_istoric_listed_at
 from app.database import CrawlTask, TaskStatus, ErrorType, ErrorLog, TaskType, TaskPriority, SessionLocal
 from app.models.keyword import Keyword, KeywordLink, KeywordStatus
 from app.models.product import FilterPool
@@ -792,6 +793,18 @@ def _extract_product_data(soup: BeautifulSoup, product_url: str) -> Dict[str, An
     }
     
     try:
+        # 优先通过 Istoric Preturi 接口获取“上架日期”，DOM 解析作为兜底
+        try:
+            listed_at = get_istoric_listed_at(product_url)
+            if listed_at:
+                data['listed_at'] = listed_at
+                logger.info(
+                    f"[上架日期] 通过 Istoric Preturi 获取上架日期成功 - URL: {product_url}, "
+                    f"listed_at: {listed_at.isoformat()}"
+                )
+        except Exception as e:
+            logger.warning(f"[上架日期] 调用 Istoric Preturi 接口失败 - URL: {product_url}, 错误: {e}")
+
         # Extract product name
         # Try multiple selectors for product name
         name_selectors = [
@@ -957,20 +970,21 @@ def _extract_product_data(soup: BeautifulSoup, product_url: str) -> Dict[str, An
                 except ValueError:
                     pass
         
-        # Extract listed_at (product listing date) - usually in product info section
-        listed_at_selectors = [
-            '[data-listed-at]',
-            '.product-info .listed-date',
-            '.product-details .date',
-        ]
-        for selector in listed_at_selectors:
-            date_elem = soup.select_one(selector)
-            if date_elem:
-                date_text = date_elem.get_text(strip=True) or date_elem.get('data-listed-at', '')
-                parsed_date = _parse_date(date_text)
-                if parsed_date:
-                    data['listed_at'] = parsed_date
-                    break
+        # 若 Istoric Preturi 未获取到，则继续尝试从页面 DOM 中解析 listed_at 作为兜底
+        if not data.get('listed_at'):
+            listed_at_selectors = [
+                '[data-listed-at]',
+                '.product-info .listed-date',
+                '.product-details .date',
+            ]
+            for selector in listed_at_selectors:
+                date_elem = soup.select_one(selector)
+                if date_elem:
+                    date_text = date_elem.get_text(strip=True) or date_elem.get('data-listed-at', '')
+                    parsed_date = _parse_date(date_text)
+                    if parsed_date:
+                        data['listed_at'] = parsed_date
+                        break
         
         # Extract thumbnail image
         thumbnail_selectors = [

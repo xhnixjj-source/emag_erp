@@ -139,21 +139,38 @@ class DynamicDataExtractor:
             if not shop_url:
                 logger.warning("Could not extract shop URL")
                 return result
+
+            # #region agent log
+            # 记录本次排名计算的关键上下文，方便对比不同商品（例如同类目下两个商品排名不一致问题）
+            try:
+                import json
+                import time
+                from app.config import get_debug_log_path
+                with open(get_debug_log_path(), 'a', encoding='utf-8') as f:
+                    log_data = {
+                        "location": "dynamic_data_extractor.py:extract_rankings:context",
+                        "message": "Rankings extraction context",
+                        "data": {
+                            "product_url": product_url,
+                            "product_id": product_id,
+                            "category_url": category_url,
+                            "brand_category_url": brand_category_url,
+                            "shop_url": shop_url
+                        },
+                        "timestamp": int(time.time() * 1000),
+                        "sessionId": "debug-session",
+                        "runId": "rank-compare",
+                        "hypothesisId": "H_CTX"
+                    }
+                    f.write(json.dumps(log_data, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
             
-            # 提取类目排名（遍历类目页前3页）
+            # 提取类目排名（遍历类目页前3页，仅在总类目下查找）
             category_ranks = self._extract_category_rank(context, category_url, product_id, max_pages=3)
             result['category_rank'] = category_ranks.get('category_rank')
             result['ad_category_rank'] = category_ranks.get('ad_category_rank')
-            if (result.get('category_rank') is None and result.get('ad_category_rank') is None
-                and brand_category_url and brand_category_url != category_url):
-                brand_category_ranks = self._extract_category_rank(
-                    context,
-                    brand_category_url,
-                    product_id,
-                    max_pages=3
-                )
-                result['category_rank'] = brand_category_ranks.get('category_rank')
-                result['ad_category_rank'] = brand_category_ranks.get('ad_category_rank')
 
             # 提取店铺排名（遍历店铺商品列表前2页）
             result['store_rank'] = self._extract_store_rank(context, shop_url, product_id, max_pages=2)
@@ -635,6 +652,11 @@ class DynamicDataExtractor:
         except Exception as e:
             logger.warning(f"Error extracting category rank: {e}")
         
+        # 如果在前 max_pages 页中都没有找到商品，则统一记为 200（类目排名和广告排名都是 200）
+        if result.get('category_rank') is None and result.get('ad_category_rank') is None:
+            result['category_rank'] = 200
+            result['ad_category_rank'] = 200
+
         # #region agent log
         import json
         import time

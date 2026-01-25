@@ -75,14 +75,14 @@ class ProductLinkCrawler:
         context = None
         try:
             # 获取代理
+            # 直接使用 proxy_manager 返回的完整代理 URL（支持 socks 协议），无需去掉前缀
             proxy_dict = proxy_manager.get_random_proxy()
             proxy_str = None
             if proxy_dict:
                 # 从代理字典中提取代理字符串
                 proxy_url = proxy_dict.get('http', '') or proxy_dict.get('https', '')
                 if proxy_url:
-                    # 移除 http:// 或 https:// 前缀
-                    proxy_str = proxy_url.replace('http://', '').replace('https://', '')
+                    proxy_str = proxy_url
             
             
             # 获取浏览器上下文

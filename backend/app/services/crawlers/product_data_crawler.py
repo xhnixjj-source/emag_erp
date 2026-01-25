@@ -17,6 +17,7 @@ from app.utils.proxy import proxy_manager
 from app.utils.captcha_handler import captcha_handler
 from app.utils.playwright_manager import get_playwright_pool
 from app.services.extractors import BaseInfoExtractor, DynamicDataExtractor
+from app.services.istoric_preturi_client import get_listed_at as get_istoric_listed_at
 from app.database import ErrorType
 
 logger = logging.getLogger(__name__)
@@ -141,17 +142,67 @@ class ProductDataCrawler:
         
         try:
             # 获取代理
+            # 这里直接使用 proxy_manager 返回的 URL，避免写死 http/https，支持 socks 协议
             proxy_dict = proxy_manager.get_random_proxy()
             if proxy_dict:
                 proxy_url = proxy_dict.get('http', '') or proxy_dict.get('https', '')
                 if proxy_url:
-                    proxy_str = proxy_url.replace('http://', '').replace('https://', '')
+                    proxy_str = proxy_url
+            
+            # #region agent log
+            try:
+                import json
+                from app.config import get_debug_log_path
+                debug_log_path = get_debug_log_path()
+                with open(debug_log_path, 'a', encoding='utf-8') as f:
+                    log_entry = {
+                        "sessionId": "debug-session",
+                        "runId": "run2",
+                        "hypothesisId": "F",
+                        "location": "product_data_crawler.py:_crawl_with_context",
+                        "message": "获取代理后 - 准备创建上下文",
+                        "data": {
+                            "proxy_dict": proxy_dict,
+                            "proxy_str": proxy_str,
+                            "product_url": product_url,
+                            "has_proxy": proxy_str is not None
+                        },
+                        "timestamp": int(time.time() * 1000)
+                    }
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
             
             logger.info(f"[爬取进行中] 开始爬取产品数据 - URL: {product_url}, 代理: {proxy_str if proxy_str else '无'}, 提取基础信息: {extract_base_info}, 提取动态数据: {extract_dynamic_data}, 提取排名: {extract_rankings}")
 
             
             # 获取浏览器上下文
             context = self.playwright_pool.acquire_context(proxy=proxy_str)
+            
+            # #region agent log
+            try:
+                import json
+                from app.config import get_debug_log_path
+                debug_log_path = get_debug_log_path()
+                with open(debug_log_path, 'a', encoding='utf-8') as f:
+                    log_entry = {
+                        "sessionId": "debug-session",
+                        "runId": "run1",
+                        "hypothesisId": "D",
+                        "location": "product_data_crawler.py:_crawl_with_context",
+                        "message": "上下文创建完成 - 准备加载页面",
+                        "data": {
+                            "proxy_str": proxy_str,
+                            "context_created": context is not None,
+                            "timeout_setting": config.PLAYWRIGHT_NAVIGATION_TIMEOUT
+                        },
+                        "timestamp": int(time.time() * 1000)
+                    }
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
             
             # 创建新页面
             page = context.new_page()
@@ -161,10 +212,85 @@ class ProductDataCrawler:
             # 加载产品详情页
             load_start = time.time()
             stage = "page_goto"
+            
+            # #region agent log
+            try:
+                import json
+                from app.config import get_debug_log_path
+                debug_log_path = get_debug_log_path()
+                with open(debug_log_path, 'a', encoding='utf-8') as f:
+                    log_entry = {
+                        "sessionId": "debug-session",
+                        "runId": "run2",
+                        "hypothesisId": "G",
+                        "location": "product_data_crawler.py:_crawl_with_context",
+                        "message": "开始页面加载",
+                        "data": {
+                            "product_url": product_url,
+                            "proxy_str": proxy_str,
+                            "timeout": config.PLAYWRIGHT_NAVIGATION_TIMEOUT,
+                            "wait_until": "domcontentloaded"
+                        },
+                        "timestamp": int(time.time() * 1000)
+                    }
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
+            
             try:
                 # 使用更宽松的 load_state，避免网络长连接导致 networkidle 超时
                 page.goto(product_url, wait_until='domcontentloaded', timeout=config.PLAYWRIGHT_NAVIGATION_TIMEOUT)
+                
+                # #region agent log
+                try:
+                    import json
+                    from app.config import get_debug_log_path
+                    debug_log_path = get_debug_log_path()
+                    with open(debug_log_path, 'a', encoding='utf-8') as f:
+                        log_entry = {
+                            "sessionId": "debug-session",
+                            "runId": "run2",
+                            "hypothesisId": "G",
+                            "location": "product_data_crawler.py:_crawl_with_context",
+                            "message": "页面加载成功",
+                            "data": {
+                                "product_url": product_url,
+                                "proxy_str": proxy_str,
+                                "elapsed_time": time.time() - load_start
+                            },
+                            "timestamp": int(time.time() * 1000)
+                        }
+                        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
             except Exception as e:
+                # #region agent log
+                try:
+                    import json
+                    from app.config import get_debug_log_path
+                    debug_log_path = get_debug_log_path()
+                    with open(debug_log_path, 'a', encoding='utf-8') as f:
+                        log_entry = {
+                            "sessionId": "debug-session",
+                            "runId": "run2",
+                            "hypothesisId": "G",
+                            "location": "product_data_crawler.py:_crawl_with_context",
+                            "message": "页面加载异常",
+                            "data": {
+                                "error_type": type(e).__name__,
+                                "error_message": str(e),
+                                "proxy_str": proxy_str,
+                                "elapsed_time": time.time() - load_start,
+                                "timeout_setting": config.PLAYWRIGHT_NAVIGATION_TIMEOUT
+                            },
+                            "timestamp": int(time.time() * 1000)
+                        }
+                        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 raise
             load_elapsed = time.time() - load_start
             logger.debug(f"[页面加载] 产品页面加载完成 - URL: {product_url}, 加载耗时: {load_elapsed:.2f}秒")
@@ -211,6 +337,25 @@ class ProductDataCrawler:
                     ranking_elapsed = time.time() - ranking_start
                     result.update(rankings)
                     logger.info(f"[数据提取] 排名信息提取完成 - URL: {product_url}, 排名数据: {rankings}, 耗时: {ranking_elapsed:.2f}秒")
+
+            # 通过 Istoric Preturi 接口补充上架日期（优先于页面 DOM 解析）
+            try:
+                listed_at = get_istoric_listed_at(product_url)
+                if listed_at:
+                    # 只有在未提前填充 listed_at 时才覆盖，避免意外覆盖更可信的来源
+                    if not result.get("listed_at"):
+                        result["listed_at"] = listed_at
+                        logger.info(f"[上架日期] 通过 Istoric Preturi 获取上架日期成功 - URL: {product_url}, listed_at: {listed_at.isoformat()}")
+                    else:
+                        logger.debug(
+                            f"[上架日期] 已存在 listed_at 字段，跳过 Istoric Preturi 覆盖 - URL: {product_url}, "
+                            f"existing={result.get('listed_at')}, istoric={listed_at.isoformat()}"
+                        )
+                else:
+                    logger.debug(f"[上架日期] Istoric Preturi 未返回上架日期 - URL: {product_url}")
+            except Exception as e:
+                # 该接口失败不影响整体验证，只记录 warning 级别日志
+                logger.warning(f"[上架日期] 调用 Istoric Preturi 接口失败 - URL: {product_url}, 错误: {e}")
             
             total_elapsed = time.time() - start_time
             logger.info(f"[爬取完成] 产品数据爬取完成 - URL: {product_url}, 总字段数: {len(result)}, 总耗时: {total_elapsed:.2f}秒")

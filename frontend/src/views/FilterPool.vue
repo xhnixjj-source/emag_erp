@@ -111,6 +111,14 @@
             </a>
           </template>
         </el-table-column>
+        <el-table-column prop="listed_at" label="上架日期" width="150">
+          <template #default="{ row }">
+            <span v-if="row.listed_at">
+              {{ formatDate(row.listed_at) }}
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="price" label="价格" width="100">
           <template #default="{ row }">
             {{ row.price ? `€${row.price}` : '-' }}
@@ -174,6 +182,20 @@ const filters = reactive({
   ad_rank_max: null,
   stock: null
 })
+
+// 简单日期格式化（假设后端返回 ISO 字符串）
+const formatDate = (value) => {
+  if (!value) return ''
+  try {
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) {
+      return value
+    }
+    return d.toLocaleDateString()
+  } catch (e) {
+    return value
+  }
+}
 
 const loadProducts = async () => {
   loading.value = true
