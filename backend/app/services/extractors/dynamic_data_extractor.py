@@ -496,8 +496,16 @@ class DynamicDataExtractor:
                         deduped.append(u)
                 return deduped
             for page_num in range(1, max_pages + 1):
+                # 如果两个排名都找到了，可以提前结束
+                if result.get('category_rank') is not None and result.get('ad_category_rank') is not None:
+                    break
+                    
                 page_urls = _build_page_urls(category_url, page_num)
                 for page_url in page_urls:
+                    # 如果两个排名都找到了，可以提前结束
+                    if result.get('category_rank') is not None and result.get('ad_category_rank') is not None:
+                        break
+                    
                     # 打开新页面
                     category_page = context.new_page()
                     # 使用 domcontentloaded 而非 networkidle，避免等待广告/分析脚本导致超时
@@ -544,6 +552,10 @@ class DynamicDataExtractor:
                     # #endregion
                     
                     for i, product in enumerate(products, start=1):
+                        # 如果两个排名都找到了，可以提前结束当前页面的遍历
+                        if result.get('category_rank') is not None and result.get('ad_category_rank') is not None:
+                            break
+                            
                         availability_id = product.get_attribute('data-availability-id')
                         href_code = None
                         try:
@@ -553,108 +565,122 @@ class DynamicDataExtractor:
                                 href_code = match.group(1) if match else None
                         except Exception:
                             href_code = None
-                        is_match = href_code and href_code == product_id
-                        if is_match:
+                        
+                        # 只处理匹配的商品
+                        if not (href_code and href_code == product_id):
+                            continue
+                        
+                        data_position = None
+                        try:
+                            data_position = product.get_attribute('data-position')
+                        except Exception:
                             data_position = None
+                        
+                        # 计算排名：(页码-1) * 每页数量 + 当前位置
+                        computed_rank = i  # 默认使用枚举序号
+                        if data_position:
                             try:
-                                data_position = product.get_attribute('data-position')
+                                pos_int = int(data_position)
+                                if pos_int > 0:
+                                    computed_rank = (page_num - 1) * page_size_for_rank + pos_int
                             except Exception:
-                                data_position = None
-                            
-                            # 计算排名：(页码-1) * 每页数量 + 当前位置
-                            computed_rank = i  # 默认使用枚举序号
-                            if data_position:
-                                try:
-                                    pos_int = int(data_position)
-                                    if pos_int > 0:
-                                        computed_rank = (page_num - 1) * page_size_for_rank + pos_int
-                                except Exception:
-                                    computed_rank = (page_num - 1) * page_size_for_rank + i
-                            else:
                                 computed_rank = (page_num - 1) * page_size_for_rank + i
-                            
-                            # 使用 data-availability-id 判断广告
-                            is_ad_by_availability = availability_id == "0"
-                            
-                            # #region agent log
-                            try:
-                                with open(get_debug_log_path(), 'a', encoding='utf-8') as f:
-                                    log_data = {
-                                        "location": "dynamic_data_extractor.py:_extract_category_rank:match_found",
-                                        "message": "Product match found",
-                                        "data": {
-                                            "product_id": product_id,
-                                            "href_code": href_code,
-                                            "availability_id": availability_id,
-                                            "is_ad": is_ad_by_availability,
-                                            "data_position": data_position,
-                                            "computed_rank": computed_rank,
-                                            "page_num": page_num,
-                                            "enumerate_i": i
-                                        },
-                                        "timestamp": int(time.time() * 1000),
-                                        "sessionId": "debug-session",
-                                        "runId": "rank-fix",
-                                        "hypothesisId": "H41"
-                                    }
-                                    f.write(json.dumps(log_data, ensure_ascii=False) + '\n')
-                            except:
-                                pass
-                            # #endregion
-                            
-                            if is_ad_by_availability:
+                        else:
+                            computed_rank = (page_num - 1) * page_size_for_rank + i
+                        
+                        # 使用 data-availability-id 判断广告
+                        is_ad_by_availability = availability_id == "0"
+                        
+                        # #region agent log
+                        try:
+                            with open(get_debug_log_path(), 'a', encoding='utf-8') as f:
+                                log_data = {
+                                    "location": "dynamic_data_extractor.py:_extract_category_rank:match_found",
+                                    "message": "Product match found",
+                                    "data": {
+                                        "product_id": product_id,
+                                        "href_code": href_code,
+                                        "availability_id": availability_id,
+                                        "is_ad": is_ad_by_availability,
+                                        "data_position": data_position,
+                                        "computed_rank": computed_rank,
+                                        "page_num": page_num,
+                                        "enumerate_i": i
+                                    },
+                                    "timestamp": int(time.time() * 1000),
+                                    "sessionId": "debug-session",
+                                    "runId": "rank-fix",
+                                    "hypothesisId": "H41"
+                                }
+                                f.write(json.dumps(log_data, ensure_ascii=False) + '\n')
+                        except:
+                            pass
+                        # #endregion
+                        
+                        # 分别记录类目排名和广告排名（不立即返回，继续遍历）
+                        if is_ad_by_availability:
+                            # 如果是广告位，且还没有记录广告排名，则记录
+                            if result.get('ad_category_rank') is None:
                                 result['ad_category_rank'] = computed_rank
-                            else:
+                        else:
+                            # 如果是普通位，且还没有记录类目排名，则记录
+                            if result.get('category_rank') is None:
                                 result['category_rank'] = computed_rank
-
-                            category_page.close()
-                            return result
                     
                     # fallback: 通过卡片链接匹配 /pd/ 码，同时获取 availability_id 判断广告
-                    try:
-                        card_items = category_page.locator('.card-item[data-availability-id]').all()
-                    except Exception:
-                        card_items = []
-                    if card_items:
-                        seen_codes = set()
-                        rank_offset = 0
-                        for card in card_items:
-                            try:
-                                href = card.locator('a[href*="/pd/"]').first.get_attribute('href')
-                                if not href:
-                                    continue
-                                match = re.search(r'/pd/([^/]+)', href)
-                                href_code = match.group(1) if match else None
-                            except Exception:
-                                href_code = None
-                            if not href_code or href_code in seen_codes:
-                                continue
-                            seen_codes.add(href_code)
-                            rank_offset += 1
-                            if href_code == product_id:
-                                # 使用 data-availability-id 判断广告
-                                card_availability_id = None
+                    # 只有在还没有找到两个排名时才执行fallback
+                    if result.get('category_rank') is None or result.get('ad_category_rank') is None:
+                        try:
+                            card_items = category_page.locator('.card-item[data-availability-id]').all()
+                        except Exception:
+                            card_items = []
+                        if card_items:
+                            seen_codes = set()
+                            rank_offset = 0
+                            for card in card_items:
+                                # 如果两个排名都找到了，可以提前结束
+                                if result.get('category_rank') is not None and result.get('ad_category_rank') is not None:
+                                    break
+                                    
                                 try:
-                                    card_availability_id = card.get_attribute('data-availability-id')
+                                    href = card.locator('a[href*="/pd/"]').first.get_attribute('href')
+                                    if not href:
+                                        continue
+                                    match = re.search(r'/pd/([^/]+)', href)
+                                    href_code = match.group(1) if match else None
                                 except Exception:
-                                    pass
-                                is_ad_by_availability = card_availability_id == "0"
-                                card_rank = (page_num - 1) * page_size_for_rank + rank_offset
-                                if is_ad_by_availability:
-                                    result['ad_category_rank'] = card_rank
-                                else:
-                                    result['category_rank'] = card_rank
-                                category_page.close()
-                                return result
+                                    href_code = None
+                                if not href_code or href_code in seen_codes:
+                                    continue
+                                seen_codes.add(href_code)
+                                rank_offset += 1
+                                if href_code == product_id:
+                                    # 使用 data-availability-id 判断广告
+                                    card_availability_id = None
+                                    try:
+                                        card_availability_id = card.get_attribute('data-availability-id')
+                                    except Exception:
+                                        pass
+                                    is_ad_by_availability = card_availability_id == "0"
+                                    card_rank = (page_num - 1) * page_size_for_rank + rank_offset
+                                    if is_ad_by_availability:
+                                        # 如果是广告位，且还没有记录广告排名，则记录
+                                        if result.get('ad_category_rank') is None:
+                                            result['ad_category_rank'] = card_rank
+                                    else:
+                                        # 如果是普通位，且还没有记录类目排名，则记录
+                                        if result.get('category_rank') is None:
+                                            result['category_rank'] = card_rank
                     
                     category_page.close()
             
         except Exception as e:
             logger.warning(f"Error extracting category rank: {e}")
         
-        # 如果在前 max_pages 页中都没有找到商品，则统一记为 200（类目排名和广告排名都是 200）
-        if result.get('category_rank') is None and result.get('ad_category_rank') is None:
+        # 如果在前 max_pages 页中都没有找到商品，则分别记为 200（类目排名和广告排名独立处理）
+        if result.get('category_rank') is None:
             result['category_rank'] = 200
+        if result.get('ad_category_rank') is None:
             result['ad_category_rank'] = 200
 
         # #region agent log
