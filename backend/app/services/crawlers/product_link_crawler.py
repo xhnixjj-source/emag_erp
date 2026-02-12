@@ -12,6 +12,7 @@ from app.config import config
 from app.utils.proxy import proxy_manager
 from app.utils.captcha_handler import captcha_handler
 from app.utils.playwright_manager import get_playwright_pool
+from app.utils.bitbrowser_manager import bitbrowser_manager
 from app.services.extractors import LinkExtractor
 from app.database import ErrorType
 
@@ -73,21 +74,37 @@ class ProductLinkCrawler:
         encoded_keyword = quote(keyword)
         
         context = None
+        window_info = None  # BitBrowser 窗口信息
+        proxy_str = None
         try:
-            # 获取代理
-            # 直接使用 proxy_manager 返回的完整代理 URL（支持 socks 协议），无需去掉前缀
-            proxy_dict = proxy_manager.get_random_proxy()
-            proxy_str = None
-            if proxy_dict:
-                # 从代理字典中提取代理字符串
-                proxy_url = proxy_dict.get('http', '') or proxy_dict.get('https', '')
-                if proxy_url:
-                    proxy_str = proxy_url
-            
-            
-            # 获取浏览器上下文
-            context = self.playwright_pool.acquire_context(proxy=proxy_str)
-            logger.info(f"[爬取进行中] 已获取浏览器上下文 - 关键字: {keyword}, 代理: {proxy_str if proxy_str else '无'}")
+            if config.BITBROWSER_ENABLED:
+                # ── BitBrowser 模式：获取共享窗口 ──
+                try:
+                    window_info = bitbrowser_manager.acquire_window()
+                except Exception as win_error:
+                    logger.error(f"[BitBrowser窗口获取失败] 获取共享窗口时出错: {str(win_error)}, 错误类型: {type(win_error).__name__}", exc_info=True)
+                    window_info = None
+                
+                if not window_info:
+                    raise RuntimeError("无法获取可用的 BitBrowser 窗口")
+                
+                # 获取浏览器上下文（CDP 连接模式）
+                context = self.playwright_pool.acquire_context(
+                    cdp_url=window_info['ws'],
+                    window_id=window_info['id'],
+                )
+                logger.info(f"[爬取进行中] 已获取浏览器上下文 - 关键字: {keyword}, BitBrowser窗口: {window_info['id']}")
+            else:
+                # ── 传统代理模式 ──
+                proxy_dict = proxy_manager.get_random_proxy()
+                if proxy_dict:
+                    proxy_url = proxy_dict.get('http', '') or proxy_dict.get('https', '')
+                    if proxy_url:
+                        proxy_str = proxy_url
+                
+                # 获取浏览器上下文
+                context = self.playwright_pool.acquire_context(proxy=proxy_str)
+                logger.info(f"[爬取进行中] 已获取浏览器上下文 - 关键字: {keyword}, 代理: {proxy_str if proxy_str else '无'}")
             
             # 爬取每一页
             for page_num in range(1, max_pages + 1):
@@ -147,16 +164,22 @@ class ProductLinkCrawler:
             return all_products
             
         except PlaywrightTimeoutError as e:
-            # 连接超时：标记代理失败
-            if proxy_str:
+            # 连接超时：标记代理失败 / 重启 BitBrowser 窗口
+            if config.BITBROWSER_ENABLED and window_info:
+                bitbrowser_manager.restart_window(window_info['id'])
+                logger.warning(f"[BitBrowser窗口重启] 连接超时，重启窗口 - 窗口ID: {window_info['id']}")
+            elif proxy_str:
                 proxy_manager.mark_proxy_failed(proxy_str)
                 logger.warning(f"[代理标记失败] 连接超时，标记代理为失败 - 代理: {proxy_str}")
             total_elapsed = time.time() - start_time
             logger.error(f"[爬取失败] 关键字搜索爬取超时 - 关键字: {keyword}, 已爬取产品数: {len(all_products)}, 错误: {str(e)}, 总耗时: {total_elapsed:.2f}秒")
             raise
         except PlaywrightError as e:
-            # 浏览器错误/主机断开：标记代理失败
-            if proxy_str:
+            # 浏览器错误/主机断开：标记代理失败 / 重启 BitBrowser 窗口
+            if config.BITBROWSER_ENABLED and window_info:
+                bitbrowser_manager.restart_window(window_info['id'])
+                logger.warning(f"[BitBrowser窗口重启] 浏览器错误，重启窗口 - 窗口ID: {window_info['id']}")
+            elif proxy_str:
                 proxy_manager.mark_proxy_failed(proxy_str)
                 logger.warning(f"[代理标记失败] 浏览器错误，标记代理为失败 - 代理: {proxy_str}")
             total_elapsed = time.time() - start_time
@@ -170,6 +193,12 @@ class ProductLinkCrawler:
             # 释放上下文
             if context:
                 self.playwright_pool.release_context(context)
+            # 释放 BitBrowser 窗口（共享模式下非必需，但保持一致性）
+            if config.BITBROWSER_ENABLED and window_info:
+                try:
+                    bitbrowser_manager.release_window(window_info['id'])
+                except Exception:
+                    pass
     
     def _crawl_single_page(
         self,
@@ -228,9 +257,13 @@ class ProductLinkCrawler:
             page_content = page_obj.content()
             
             if captcha_handler.detect_captcha(page_content, page_content):
-                logger.warning(f"[验证码检测] 检测到验证码 - 关键字: {keyword}, 页码: {page}, URL: {search_url}, 代理: {proxy_str if proxy_str else '无'}")
-                # 标记当前代理失败，以便重试时使用新代理
-                if proxy_str:
+                logger.warning(f"[验证码检测] 检测到验证码 - 关键字: {keyword}, 页码: {page}, URL: {search_url}, 代理/窗口: {proxy_str if proxy_str else '无'}")
+                # 标记当前代理/窗口失败，以便重试时使用新IP
+                if config.BITBROWSER_ENABLED:
+                    # BitBrowser 模式下，proxy_str 为 None，但 window_info 在外层方法中
+                    # 这里不直接 restart，由外层 crawl_search_results 的 except 处理
+                    logger.warning(f"[BitBrowser] 验证码检测，将在外层触发窗口重启")
+                elif proxy_str:
                     proxy_manager.mark_proxy_failed(proxy_str)
                     logger.warning(f"[代理标记失败] 验证码检测，标记代理为失败 - 代理: {proxy_str}")
                 if task_id and db:

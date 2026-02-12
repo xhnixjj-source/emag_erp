@@ -25,6 +25,7 @@ class ProxyManager:
     def __init__(self):
         self.proxies: List[str] = []
         self.failed_proxies: set = set()  # 追踪失败的代理
+        self.occupied_proxies: set = set()  # 追踪已占用的代理（独占式分配）
         self.current_index: int = 0
         self.enabled: bool = config.PROXY_ENABLED
         self.last_api_fetch_time: Optional[float] = None
@@ -171,8 +172,8 @@ class ProxyManager:
             # GET 方式（获取 IP 列表）
             params = {}
             
-            # 构建 LunaProxy API 参数
-            if 'lunaproxy.com' in url or 'lunaproxy' in url.lower():
+            # 构建 LunaProxy API 参数（支持 lunaproxy.com 和 lunadataset.com）
+            if 'lunaproxy.com' in url or 'lunadataset.com' in url or 'lunaproxy' in url.lower():
                 if config.PROXY_API_USER_ID:
                     params['neek'] = config.PROXY_API_USER_ID
                 if config.PROXY_API_IP_COUNT:
@@ -187,6 +188,8 @@ class ProxyManager:
             if config.PROXY_API_KEY:
                 headers['Authorization'] = f"Bearer {config.PROXY_API_KEY}"
             
+            
+            
             logger.debug(f"请求代理 API: {url}, params: {params}")
             
             response = requests.get(
@@ -198,21 +201,24 @@ class ProxyManager:
             
             response.raise_for_status()
             
-            # 解析响应 - LunaProxy 返回纯文本，每行一个 IP:PORT
-            text_content = response.text.strip()
-            if text_content:
-                proxy_list = [
-                    line.strip() for line in text_content.split('\n')
-                    if line.strip() and ':' in line.strip()
-                ]
-                if proxy_list:
-                    self.last_api_fetch_time = time.time()
-                    logger.info(f"从 API 获取了 {len(proxy_list)} 个代理")
-                    return proxy_list
             
-            # 尝试解析 JSON 响应
+            
+            # 首先尝试解析 JSON 响应（检查是否是错误消息）
             try:
                 data = response.json()
+                
+                
+                # 检查是否是错误消息（包含 code 和 msg 字段，且 code 不是成功码）
+                if isinstance(data, dict) and 'code' in data and 'msg' in data:
+                    error_code = data.get('code')
+                    error_msg = data.get('msg', '')
+                    # 如果 code 不是 0 或 200（常见成功码），则认为是错误消息
+                    if error_code != 0 and error_code != 200:
+                        logger.warning(f"代理API返回错误: code={error_code}, msg={error_msg}")
+                        
+                        return []  # 返回空列表，不将错误消息当作代理
+                
+                # 正常解析代理列表
                 if isinstance(data, dict):
                     proxies = data.get('proxies', data.get('data', data.get('list', [])))
                 elif isinstance(data, list):
@@ -220,25 +226,44 @@ class ProxyManager:
                 else:
                     proxies = []
                 
-                proxy_list = [str(p).strip() for p in proxies if p and ':' in str(p)]
+                proxy_list = [str(p).strip() for p in proxies if p and ':' in str(p) and not str(p).startswith('{')]
                 self.last_api_fetch_time = time.time()
                 
                 if proxy_list:
                     logger.info(f"从 API 获取了 {len(proxy_list)} 个代理 (JSON 格式)")
-                
-                return proxy_list
+                    return proxy_list
             except ValueError:
-                # 如果不是 JSON，按行分割
+                # 如果不是 JSON，按行分割（纯文本格式）
+                pass
+            
+            # 解析响应 - LunaProxy 返回纯文本，每行一个 IP:PORT
+            text_content = response.text.strip()
+            if text_content:
+                # 检查是否包含JSON格式的错误消息（以 { 开头）
+                if text_content.startswith('{') or text_content.startswith('['):
+                    try:
+                        # 尝试解析为JSON，如果是错误消息则忽略
+                        error_data = json.loads(text_content)
+                        if isinstance(error_data, dict) and 'code' in error_data and 'msg' in error_data:
+                            error_code = error_data.get('code')
+                            if error_code != 0 and error_code != 200:
+                                logger.warning(f"代理API返回错误（文本格式）: {error_data.get('msg', '')}")
+                                return []
+                    except (ValueError, json.JSONDecodeError):
+                        pass  # 不是JSON，继续处理
+                
                 proxy_list = [
-                    line.strip() for line in response.text.strip().split('\n')
-                    if line.strip() and ':' in line.strip()
+                    line.strip() for line in text_content.split('\n')
+                    if line.strip() and ':' in line.strip() and not line.strip().startswith('{')
                 ]
-                self.last_api_fetch_time = time.time()
-                
                 if proxy_list:
-                    logger.info(f"从 API 获取了 {len(proxy_list)} 个代理 (文本格式)")
-                
-                return proxy_list
+                    self.last_api_fetch_time = time.time()
+                    logger.info(f"从 API 获取了 {len(proxy_list)} 个代理")
+                    return proxy_list
+            
+            # 如果没有找到有效代理，返回空列表
+            logger.warning(f"API响应中未找到有效代理: {response.text[:100]}")
+            return []
                 
         except requests.exceptions.Timeout as e:
             logger.error(f"API 请求超时: {e}")
@@ -393,30 +418,125 @@ class ProxyManager:
         # 与 get_proxy 保持一致，使用 PROXY_SCHEME 生成 SOCKS 代理 URL
         scheme = getattr(config, "PROXY_SCHEME", "socks5")
         if "://" in proxy_str:
-            proxy_dict = {"http": proxy_str, "https": proxy_str}
+            proxy_dict = {"http": proxy_str, "https": proxy_str, "_raw": proxy_str}
         else:
-            proxy_dict = {"http": f"{scheme}://{proxy_str}", "https": f"{scheme}://{proxy_str}"}
-        
-        # #region agent log
-        try:
-            import json
-            debug_log_path = get_debug_log_path()
-            with open(debug_log_path, 'a', encoding='utf-8') as f:
-                log_entry = {
-                    "sessionId": "debug-session",
-                    "runId": "run2",
-                    "hypothesisId": "F",
-                    "location": "proxy.py:get_random_proxy",
-                    "message": "代理格式化完成",
-                    "data": {"proxy_str": proxy_str, "proxy_dict": proxy_dict},
-                    "timestamp": int(time.time() * 1000)
-                }
-                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
-        # #endregion
+            proxy_dict = {"http": f"{scheme}://{proxy_str}", "https": f"{scheme}://{proxy_str}", "_raw": proxy_str}
         
         return proxy_dict
+    
+    def acquire_exclusive_proxy(self) -> Optional[dict]:
+        """
+        获取独占式代理（保证每个线程使用独立的 IP）
+        
+        Returns:
+            代理字典，格式：{"http": "socks5://ip:port", "https": "socks5://ip:port"}
+            如果没有可用代理，返回 None
+            
+        Note:
+            使用完毕后必须调用 release_proxy() 释放代理
+        """
+        if not self.enabled or not self.proxies:
+            return None
+        
+        # 如果代理池太小，尝试刷新
+        if len(self.proxies) < 10 and config.PROXY_API_URL:
+            self.refresh_proxies_from_api()
+        
+        with self._lock:
+            # 过滤掉已知失败的和已占用的代理
+            available_proxies = [
+                p for p in self.proxies 
+                if p not in self.failed_proxies and p not in self.occupied_proxies
+            ]
+            
+            # 记录代理池状态
+            print(f"[代理池检查] 可用代理数: {len(available_proxies)}, 已占用: {len(self.occupied_proxies)}, 失败: {len(self.failed_proxies)}, 总数: {len(self.proxies)}")
+            
+            if not available_proxies:
+                # 如果没有可用代理，尝试刷新
+                print(f"[代理池状态] 没有可用独占代理 - 已占用: {len(self.occupied_proxies)}, 失败: {len(self.failed_proxies)}, 总数: {len(self.proxies)}")
+                logger.warning(f"没有可用独占代理，已占用: {len(self.occupied_proxies)}, 失败: {len(self.failed_proxies)}, 总数: {len(self.proxies)}")
+                
+                # 如果失败代理太多，清空占用列表（可能有些代理已经释放但没有从占用列表中移除）
+                if len(self.occupied_proxies) > len(self.proxies) * 0.8:
+                    print(f"[代理池清理] 占用代理过多，清空占用列表 - 已占用: {len(self.occupied_proxies)}, 总数: {len(self.proxies)}")
+                    self.occupied_proxies.clear()
+                    available_proxies = [
+                        p for p in self.proxies 
+                        if p not in self.failed_proxies
+                    ]
+                
+                # 如果仍然没有可用代理，尝试刷新
+                if not available_proxies and config.PROXY_API_URL:
+                    self.refresh_proxies_from_api()
+                    available_proxies = [
+                        p for p in self.proxies 
+                        if p not in self.failed_proxies and p not in self.occupied_proxies
+                    ]
+                
+                if not available_proxies:
+                    # 仍然没有可用代理，回退到随机选择（允许复用，类似 get_random_proxy 的行为）
+                    print(f"[代理池耗尽] 回退到随机选择 - 已占用: {len(self.occupied_proxies)}, 失败: {len(self.failed_proxies)}, 总数: {len(self.proxies)}")
+                    logger.warning("代理池耗尽，回退到随机选择")
+                    # 回退到随机选择时，不标记为占用（允许复用）
+                    random_proxy = self.get_random_proxy()
+                    if random_proxy:
+                        # 确保返回的代理字典包含 _raw 字段，以便后续释放
+                        if '_raw' not in random_proxy:
+                            http_proxy = random_proxy.get('http', '')
+                            if '://' in http_proxy:
+                                random_proxy['_raw'] = http_proxy.split('://', 1)[1]
+                            else:
+                                random_proxy['_raw'] = http_proxy
+                    return random_proxy
+            
+            # 选择第一个可用代理并标记为已占用
+            proxy_str = available_proxies[0]
+            self.occupied_proxies.add(proxy_str)
+            print(f"[代理分配详情] 分配独占代理: {proxy_str}, 剩余可用: {len(available_proxies) - 1}, 已占用: {len(self.occupied_proxies)}, 失败: {len(self.failed_proxies)}, 总数: {len(self.proxies)}")
+            logger.debug(f"分配独占代理: {proxy_str}, 剩余可用: {len(available_proxies) - 1}")
+        
+        # 格式化代理
+        scheme = getattr(config, "PROXY_SCHEME", "socks5")
+        if "://" in proxy_str:
+            proxy_dict = {"http": proxy_str, "https": proxy_str, "_raw": proxy_str}
+        else:
+            proxy_dict = {"http": f"{scheme}://{proxy_str}", "https": f"{scheme}://{proxy_str}", "_raw": proxy_str}
+        
+        return proxy_dict
+    
+    def release_proxy(self, proxy_dict: Optional[dict]):
+        """
+        释放独占代理
+        
+        Args:
+            proxy_dict: acquire_exclusive_proxy() 返回的代理字典
+        """
+        if not proxy_dict:
+            print(f"[代理释放] proxy_dict 为空，跳过释放")
+            return
+        
+        # 获取原始代理字符串
+        proxy_str = proxy_dict.get('_raw')
+        if not proxy_str:
+            # 尝试从 http URL 中提取
+            http_proxy = proxy_dict.get('http', '')
+            if '://' in http_proxy:
+                proxy_str = http_proxy.split('://', 1)[1]
+            else:
+                proxy_str = http_proxy
+        
+        if proxy_str:
+            with self._lock:
+                was_occupied = proxy_str in self.occupied_proxies
+                if was_occupied:
+                    self.occupied_proxies.discard(proxy_str)
+                    print(f"[代理释放] 释放独占代理: {proxy_str}, 释放前占用数: {len(self.occupied_proxies) + 1}, 释放后占用数: {len(self.occupied_proxies)}")
+                    logger.debug(f"释放独占代理: {proxy_str}, 当前占用: {len(self.occupied_proxies)}")
+                else:
+                    print(f"[代理释放警告] 代理 {proxy_str} 不在占用列表中，可能已经释放或从未占用")
+        else:
+            print(f"[代理释放错误] 无法从 proxy_dict 中提取代理字符串: {proxy_dict}")
     
     def get_proxy_for_playwright(self) -> Optional[dict]:
         """

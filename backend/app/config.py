@@ -32,7 +32,7 @@ class Config:
     
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./emag_erp.db")
-    
+
     # Proxy configuration
     # 代理配置说明：
     # - 启用 lunaproxy 动态 IP 代理模式
@@ -49,10 +49,10 @@ class Config:
     # 默认使用 GET 方式获取 IP 列表，参数通过下方配置项指定
     PROXY_API_URL: str = os.getenv(
         "PROXY_API_URL", 
-        "https://tq.lunaproxy.com/get_dynamic_ip"
+        "https://tq.lunadataset.com/get_dynamic_ip"
     )
     # PROXY_API_URL 支持两种格式：
-    # 1. GET方式（获取IP列表）：https://tq.lunaproxy.com/get_dynamic_ip
+    # 1. GET方式（获取IP列表）：https://tq.lunadataset.com/get_dynamic_ip
     # 2. POST方式（Unlocker API）：https://unlocker-api.lunaproxy.com/request
     #    Unlocker API用于页面解锁服务，不直接返回IP列表，需要通过API请求访问页面
     PROXY_API_KEY: Optional[str] = os.getenv("PROXY_API_KEY", None)
@@ -64,7 +64,19 @@ class Config:
     # - 使用 socks 协议需要在环境中安装 requests[socks] / PySocks
     # - 建议使用 socks5 或 socks5h（带域名解析）
     PROXY_SCHEME: str = os.getenv("PROXY_SCHEME", "socks5")
-    
+
+    # BitBrowser configuration
+    # 说明：
+    # - 当 BITBROWSER_ENABLED=true 时，优先通过 BitBrowser 窗口进行所有 Playwright 爬取
+    # - 推荐使用 BITBROWSER_GROUP_ID 指定窗口组，系统自动拉取该组下所有窗口
+    # - 也可使用 BITBROWSER_WINDOW_IDS 手动指定窗口 ID（当 GROUP_ID 为空时的 fallback）
+    BITBROWSER_ENABLED: bool = os.getenv("BITBROWSER_ENABLED", "false").lower() == "true"
+    BITBROWSER_API_URL: str = os.getenv("BITBROWSER_API_URL", "http://127.0.0.1:54345")
+    BITBROWSER_GROUP_ID: str = os.getenv("BITBROWSER_GROUP_ID", "")
+    BITBROWSER_WINDOW_IDS: List[str] = os.getenv("BITBROWSER_WINDOW_IDS", "").split(",") if os.getenv("BITBROWSER_WINDOW_IDS") else []
+    BITBROWSER_MAX_RESTART_COUNT: int = int(os.getenv("BITBROWSER_MAX_RESTART_COUNT", "10"))
+    BITBROWSER_RESTART_DELAY: int = int(os.getenv("BITBROWSER_RESTART_DELAY", "5"))
+
     # Crawler configuration
     CRAWLER_DELAY_MIN: int = int(os.getenv("CRAWLER_DELAY_MIN", "1"))
     CRAWLER_DELAY_MAX: int = int(os.getenv("CRAWLER_DELAY_MAX", "3"))
@@ -113,11 +125,11 @@ class Config:
     
     # Dynamic IP proxy API configuration (LunaProxy)
     # lunaproxy 用户 ID（neek 参数），从 lunaproxy 控制台获取
-    PROXY_API_USER_ID: Optional[str] = os.getenv("PROXY_API_USER_ID", "1851908")
+    PROXY_API_USER_ID: Optional[str] = os.getenv("PROXY_API_USER_ID", "1866167")
     # 代理地区，all 表示全球，可指定如 "ro" 表示罗马尼亚
     PROXY_API_COUNTRY: str = os.getenv("PROXY_API_COUNTRY", "all")
     # 每次 API 请求获取的 IP 数量
-    PROXY_API_IP_COUNT: int = int(os.getenv("PROXY_API_IP_COUNT", "100"))
+    PROXY_API_IP_COUNT: int = int(os.getenv("PROXY_API_IP_COUNT", "1000"))
     # IP 有效期（分钟），lunaproxy 的 ip_si 参数：1-120 分钟
     PROXY_API_IP_SI: int = int(os.getenv("PROXY_API_IP_SI", "5"))
     # 分隔符参数，空字符串表示每行一个 IP:PORT
@@ -128,27 +140,18 @@ class Config:
 
     # Istoric Preturi 插件后端接口配置
     # 说明：
-    # - 需要先在浏览器 DevTools 中抓包 Istoric Preturi 插件点击时的网络请求
-    # - 将抓到的实际接口 URL、超时、重试次数等配置到环境变量中
-    # - 本系统后端只负责按配置调用该 HTTP 接口并解析“上架日期”字段
-    # - 具体字段名和路径可通过下面的配置项灵活调整
-    ISTORIC_PRETURI_ENABLED: bool = os.getenv("ISTORIC_PRETURI_ENABLED", "true").lower() == "true"
-    # 完整接口 URL，例如：https://api.istoricpreturi.ro/v1/product
-    ISTORIC_PRETURI_ENDPOINT: str = os.getenv("ISTORIC_PRETURI_ENDPOINT", "")
+    # - 通过逆向分析 Chrome 插件源码获取 API 地址
+    # - POST /getProductInfo 返回包含 Chart.js 图表数据的 HTML
+    # - 从图表 data.labels[0] 提取最早追踪日期（即上架日期）
+    ISTORIC_PRETURI_ENABLED: bool = os.getenv("ISTORIC_PRETURI_ENABLED", "false").lower() == "true"
+    # 临时总开关：允许在不改代码的情况下完全屏蔽上架日期获取逻辑
+    DISABLE_LISTED_AT: bool = os.getenv("DISABLE_LISTED_AT", "true").lower() == "true"
+    # API 基础地址（不含路径），如 https://api.istoric-preturi.info
+    ISTORIC_PRETURI_ENDPOINT: str = os.getenv("ISTORIC_PRETURI_ENDPOINT", "https://api.istoric-preturi.info")
     # 调用超时时间（秒）
-    ISTORIC_PRETURI_TIMEOUT: int = int(os.getenv("ISTORIC_PRETURI_TIMEOUT", "10"))
+    ISTORIC_PRETURI_TIMEOUT: int = int(os.getenv("ISTORIC_PRETURI_TIMEOUT", "15"))
     # 最大重试次数（独立于全局爬虫重试配置）
     ISTORIC_PRETURI_MAX_RETRIES: int = int(os.getenv("ISTORIC_PRETURI_MAX_RETRIES", "3"))
-    # 如对方接口需要简单的 API Key / Token，可通过环境变量注入
-    ISTORIC_PRETURI_API_KEY: Optional[str] = os.getenv("ISTORIC_PRETURI_API_KEY", None)
-    # 请求中使用产品 URL 的参数名（如 ?url=xxx 或 ?product_url=xxx）
-    ISTORIC_PRETURI_URL_PARAM: str = os.getenv("ISTORIC_PRETURI_URL_PARAM", "url")
-    # 如果接口需要 pnk_code 而不是完整 URL，可通过该参数名传递（留空则不传）
-    ISTORIC_PRETURI_PNK_PARAM: Optional[str] = os.getenv("ISTORIC_PRETURI_PNK_PARAM", None)
-    # 响应 JSON 中“上架日期”字段的 key（支持嵌套路径，使用点号分隔，如 data.listed_at）
-    ISTORIC_PRETURI_LISTED_AT_PATH: str = os.getenv("ISTORIC_PRETURI_LISTED_AT_PATH", "listed_at")
-    # 接口返回的日期格式（如 %Y-%m-%d），留空则使用内置多格式尝试解析
-    ISTORIC_PRETURI_DATE_FORMAT: Optional[str] = os.getenv("ISTORIC_PRETURI_DATE_FORMAT", None)
 
 
 config = Config()

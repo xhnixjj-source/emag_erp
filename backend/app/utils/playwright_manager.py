@@ -52,6 +52,8 @@ class ContextInfo:
     reuse_count: int
     owner_thread_id: Optional[int] = None
     is_valid: bool = True
+    cdp_browser: Optional[Browser] = None  # CDP 连接的浏览器引用（BitBrowser 模式）
+    window_id: Optional[str] = None  # BitBrowser 窗口ID
 
 class PlaywrightContextPool:
     """线程安全的Playwright浏览器上下文池"""
@@ -196,7 +198,10 @@ class PlaywrightContextPool:
                 if require_proxy:
                     proxy_dict = self._format_proxy(proxy_server or "http://per-context")
                     if proxy_dict:
+                        print(f"[Playwright代理配置] 浏览器启动代理配置: {proxy_dict}, 原始代理: {proxy_server}")
                         launch_options["proxy"] = proxy_dict
+                    else:
+                        print(f"[Playwright代理配置警告] 无法格式化浏览器启动代理: {proxy_server}")
 
                 browser = browser_type.launch(**launch_options)
                 
@@ -221,12 +226,19 @@ class PlaywrightContextPool:
         # 不再需要初始化，因为每个线程会在需要时通过_get_or_init_playwright自动初始化
         pass
     
-    def acquire_context(self, proxy: Optional[str] = None) -> BrowserContext:
+    def acquire_context(
+        self,
+        proxy: Optional[str] = None,
+        cdp_url: Optional[str] = None,
+        window_id: Optional[str] = None,
+    ) -> BrowserContext:
         """
         获取可用的浏览器上下文
         
         Args:
-            proxy: 代理地址（格式：ip:port 或 http://ip:port）
+            proxy: 代理地址（格式：ip:port 或 http://ip:port）— 传统代理模式
+            cdp_url: CDP WebSocket URL — BitBrowser CDP 连接模式
+            window_id: BitBrowser 窗口ID（用于日志和追踪）
             
         Returns:
             BrowserContext对象
@@ -237,7 +249,11 @@ class PlaywrightContextPool:
             # 健康检查
             self._health_check_if_needed()
             
-            # 如果启用上下文复用，尝试复用现有上下文
+            # CDP 连接模式（BitBrowser）
+            if cdp_url:
+                return self._create_context_cdp(cdp_url, window_id)
+            
+            # 传统代理模式 — 如果启用上下文复用，尝试复用现有上下文
             if self._context_reuse and proxy:
                 context_id = self._find_available_context(proxy)
                 if context_id:
@@ -328,25 +344,11 @@ class PlaywrightContextPool:
             if proxy:
                 proxy_dict = self._format_proxy(proxy)
                 if proxy_dict:
+                    print(f"[Playwright代理配置] 上下文代理配置: {proxy_dict}, 原始代理: {proxy}")
                     context_options['proxy'] = proxy_dict
-                    # #region agent log
-                    try:
-                        import json
-                        debug_log_path = _get_debug_log_path()
-                        with open(debug_log_path, 'a', encoding='utf-8') as f:
-                            log_entry = {
-                                "sessionId": "debug-session",
-                                "runId": "run2",
-                                "hypothesisId": "G",
-                                "location": "playwright_manager.py:_create_context",
-                                "message": "代理配置已添加到上下文选项",
-                                "data": {"proxy": proxy, "proxy_dict": proxy_dict},
-                                "timestamp": int(time.time() * 1000)
-                            }
-                            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
+                else:
+                    print(f"[Playwright代理配置警告] 无法格式化代理: {proxy}")
+                    
             
             # 获取或初始化当前线程的Playwright和Browser实例
             # 每个线程有独立的实例，避免greenlet跨线程切换问题
@@ -356,28 +358,7 @@ class PlaywrightContextPool:
                 proxy_server=proxy
             )
             
-            # #region agent log
-            try:
-                import json
-                debug_log_path = _get_debug_log_path()
-                with open(debug_log_path, 'a', encoding='utf-8') as f:
-                    log_entry = {
-                        "sessionId": "debug-session",
-                        "runId": "run2",
-                        "hypothesisId": "G",
-                        "location": "playwright_manager.py:_create_context",
-                        "message": "浏览器实例获取完成",
-                        "data": {
-                            "proxy": proxy,
-                            "elapsed_time": time.time() - context_create_start,
-                            "has_browser": browser is not None
-                        },
-                        "timestamp": int(time.time() * 1000)
-                    }
-                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-            # #endregion
+            
             
             
             try:
@@ -414,52 +395,9 @@ class PlaywrightContextPool:
                 # 对该上下文下的所有页面生效
                 context.route("**/*", _route_handler)
 
-                # #region agent log
-                try:
-                    import json
-                    debug_log_path = _get_debug_log_path()
-                    with open(debug_log_path, 'a', encoding='utf-8') as f:
-                        log_entry = {
-                            "sessionId": "debug-session",
-                            "runId": "run2",
-                            "hypothesisId": "G",
-                            "location": "playwright_manager.py:_create_context",
-                            "message": "浏览器上下文创建成功",
-                            "data": {
-                                "proxy": proxy,
-                                "has_proxy_in_options": "proxy" in context_options,
-                                "total_elapsed": time.time() - context_create_start
-                            },
-                            "timestamp": int(time.time() * 1000)
-                        }
-                        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
+                
             except Exception as e:
-                # #region agent log
-                try:
-                    import json
-                    debug_log_path = _get_debug_log_path()
-                    with open(debug_log_path, 'a', encoding='utf-8') as f:
-                        log_entry = {
-                            "sessionId": "debug-session",
-                            "runId": "run2",
-                            "hypothesisId": "G",
-                            "location": "playwright_manager.py:_create_context",
-                            "message": "浏览器上下文创建失败",
-                            "data": {
-                                "proxy": proxy,
-                                "error_type": type(e).__name__,
-                                "error_message": str(e),
-                                "elapsed_time": time.time() - context_create_start
-                            },
-                            "timestamp": int(time.time() * 1000)
-                        }
-                        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
+                
                 raise
             context.set_default_timeout(config.PLAYWRIGHT_TIMEOUT)
             context.set_default_navigation_timeout(config.PLAYWRIGHT_NAVIGATION_TIMEOUT)
@@ -487,6 +425,138 @@ class PlaywrightContextPool:
             
         except Exception as e:
             logger.error(f"Failed to create context: {e}")
+            raise
+    
+    def _get_playwright_for_cdp(self) -> Playwright:
+        """
+        获取当前线程的 Playwright 实例（CDP 模式专用，不启动浏览器）
+        
+        Returns:
+            Playwright 实例
+        """
+        if hasattr(self._thread_local, 'playwright') and self._thread_local.playwright is not None:
+            return self._thread_local.playwright
+        
+        # Windows 上确保使用正确的事件循环
+        if platform.system() == 'Windows':
+            import asyncio
+            try:
+                try:
+                    loop = asyncio.get_event_loop()
+                    if not isinstance(loop, asyncio.ProactorEventLoop):
+                        try:
+                            loop.close()
+                        except Exception:
+                            pass
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+            except Exception:
+                pass
+        
+        playwright = sync_playwright().start()
+        self._thread_local.playwright = playwright
+        logger.info(
+            f"Playwright instance initialized for thread {threading.current_thread().ident} (CDP mode)"
+        )
+        return playwright
+    
+    def _create_context_cdp(self, cdp_url: str, window_id: Optional[str] = None) -> BrowserContext:
+        """
+        通过 CDP 连接创建浏览器上下文（BitBrowser 模式）
+        
+        Args:
+            cdp_url: CDP WebSocket URL
+            window_id: BitBrowser 窗口ID
+            
+        Returns:
+            BrowserContext对象
+        """
+        try:
+            # 检查是否超过最大上下文数
+            if len(self._contexts) >= self._max_contexts:
+                self._cleanup_invalid_contexts()
+                if len(self._contexts) >= self._max_contexts:
+                    self._close_oldest_context()
+            
+            # 获取 Playwright 实例（不启动浏览器）
+            playwright = self._get_playwright_for_cdp()
+            
+            # 通过 CDP 连接到已有浏览器
+            logger.info(
+                f"[CDP连接] 正在连接到 BitBrowser 窗口 - window_id: {window_id}, cdp_url: {cdp_url}"
+            )
+            cdp_browser = playwright.chromium.connect_over_cdp(cdp_url)
+            
+            # 准备上下文选项（CDP 模式下不设置 proxy，由 BitBrowser 窗口自带）
+            context_options: Dict[str, Any] = {
+                'user_agent': random.choice(self.USER_AGENTS),
+                'viewport': {'width': 1920, 'height': 1080},
+                'locale': 'ro-RO',
+                'timezone_id': 'Europe/Bucharest',
+                'accept_downloads': False,
+                'ignore_https_errors': True,
+            }
+            
+            context = cdp_browser.new_context(**context_options)
+            
+            # 在上下文层面统一屏蔽静态资源，减少带宽占用并提升加载速度
+            def _should_block(route_request) -> bool:
+                r_type = route_request.resource_type
+                url = route_request.url
+                if r_type in ("image", "media", "font", "stylesheet"):
+                    return True
+                block_keywords = [
+                    "doubleclick.net",
+                    "googlesyndication.com",
+                    "google-analytics.com",
+                    "facebook.net",
+                ]
+                for kw in block_keywords:
+                    if kw in url:
+                        return True
+                return False
+
+            def _route_handler(route):
+                try:
+                    if _should_block(route.request):
+                        return route.abort()
+                except Exception:
+                    pass
+                return route.continue_()
+
+            context.route("**/*", _route_handler)
+            
+            context.set_default_timeout(config.PLAYWRIGHT_TIMEOUT)
+            context.set_default_navigation_timeout(config.PLAYWRIGHT_NAVIGATION_TIMEOUT)
+            
+            # 生成上下文ID
+            context_id = f"cdp_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
+            
+            # 保存上下文信息
+            context_info = ContextInfo(
+                context=context,
+                proxy=None,
+                created_at=time.time(),
+                last_used_at=time.time(),
+                reuse_count=1,
+                owner_thread_id=threading.current_thread().ident,
+                is_valid=True,
+                cdp_browser=cdp_browser,
+                window_id=window_id,
+            )
+            
+            self._contexts[context_id] = context_info
+            
+            logger.info(
+                f"[CDP连接] 浏览器上下文创建成功 - context_id: {context_id}, window_id: {window_id}"
+            )
+            return context
+            
+        except Exception as e:
+            logger.error(f"[CDP连接] 创建CDP上下文失败 - window_id: {window_id}, error: {e}")
             raise
     
     def _find_available_context(self, proxy: Optional[str] = None) -> Optional[str]:
@@ -523,24 +593,7 @@ class PlaywrightContextPool:
         if not proxy:
             return None
         
-        # #region agent log
-        try:
-            import json
-            debug_log_path = _get_debug_log_path()
-            with open(debug_log_path, 'a', encoding='utf-8') as f:
-                log_entry = {
-                    "sessionId": "debug-session",
-                    "runId": "post-fix",
-                    "hypothesisId": "A",
-                    "location": "playwright_manager.py:_format_proxy",
-                    "message": "格式化代理前 - 输入参数",
-                    "data": {"proxy": proxy, "has_at_symbol": "@" in proxy},
-                    "timestamp": int(time.time() * 1000)
-                }
-                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
-        # #endregion
+        
         
         try:
             # 处理不同格式的代理
@@ -562,53 +615,12 @@ class PlaywrightContextPool:
                 proxy_dict["username"] = parsed.username or ""
                 proxy_dict["password"] = parsed.password or ""
             
-            # #region agent log
-            try:
-                import json
-                debug_log_path = _get_debug_log_path()
-                with open(debug_log_path, 'a', encoding='utf-8') as f:
-                    log_entry = {
-                        "sessionId": "debug-session",
-                        "runId": "post-fix",
-                        "hypothesisId": "A",
-                        "location": "playwright_manager.py:_format_proxy",
-                        "message": "格式化代理后 - 输出结果",
-                        "data": {
-                            "proxy_dict": proxy_dict,
-                            "has_username": "username" in proxy_dict,
-                            "has_password": "password" in proxy_dict,
-                            "username": proxy_dict.get("username", ""),
-                            "parsed_username": parsed.username,
-                            "parsed_password": parsed.password
-                        },
-                        "timestamp": int(time.time() * 1000)
-                    }
-                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-            # #endregion
+            
 
             return proxy_dict
         except Exception as e:
             logger.warning(f"Failed to format proxy {proxy}: {e}")
-            # #region agent log
-            try:
-                import json
-                debug_log_path = _get_debug_log_path()
-                with open(debug_log_path, 'a', encoding='utf-8') as f:
-                    log_entry = {
-                        "sessionId": "debug-session",
-                        "runId": "post-fix",
-                        "hypothesisId": "E",
-                        "location": "playwright_manager.py:_format_proxy",
-                        "message": "代理格式化失败",
-                        "data": {"proxy": proxy, "error": str(e)},
-                        "timestamp": int(time.time() * 1000)
-                    }
-                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-            # #endregion
+            
             return None
     
     def _close_oldest_context(self):
@@ -659,6 +671,13 @@ class PlaywrightContextPool:
         except Exception as e:
             logger.warning(f"Error closing context {context_id}: {e}")
         finally:
+            # CDP 模式下断开与远程浏览器的连接（不会关闭实际的 BitBrowser 窗口）
+            if context_info.cdp_browser:
+                try:
+                    context_info.cdp_browser.close()
+                    logger.debug(f"Disconnected CDP browser for context {context_id} (window: {context_info.window_id})")
+                except Exception as e:
+                    logger.warning(f"Error disconnecting CDP browser for context {context_id}: {e}")
             # 从字典中移除
             if context_id in self._contexts:
                 del self._contexts[context_id]

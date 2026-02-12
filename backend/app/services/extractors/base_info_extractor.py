@@ -5,7 +5,7 @@
 import logging
 from typing import Dict, Any, Optional
 from urllib.parse import urljoin
-from playwright.sync_api import Page
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,12 @@ class BaseInfoExtractor:
         result: Dict[str, Any] = {}
         
         try:
-            # 等待页面加载
-            page.wait_for_load_state('networkidle', timeout=30000)
+            # 等待页面加载：使用更宽松的 60 秒，并且超时不直接终止后续提取
+            try:
+                page.wait_for_load_state('networkidle', timeout=60000)
+            except PlaywrightTimeoutError as e:
+                # 仅记录超时，继续依赖前面的 page.goto('domcontentloaded') + 选择器提取
+                logger.warning(f"BaseInfoExtractor wait_for_load_state('networkidle') 超时, 继续尝试提取基础信息: {e}")
             
             # 提取产品标题
             result['title'] = self._extract_title(page)
@@ -65,55 +69,11 @@ class BaseInfoExtractor:
             
             logger.debug(f"Extracted base info: title={result.get('title')}, shop={result.get('shop_name')}")
             
-            # #region agent log
-            import json
-            import time
-            from app.config import get_debug_log_path
-            try:
-                missing_fields = [k for k, v in result.items() if v is None]
-                with open(get_debug_log_path(), 'a', encoding='utf-8') as f:
-                    log_data = {
-                        "location": "base_info_extractor.py:extract:result",
-                        "message": "Base info extraction result",
-                        "data": {
-                            "product_url": product_url,
-                            "missing_fields": missing_fields,
-                            "has_title": result.get('title') is not None,
-                            "has_brand": result.get('brand') is not None,
-                            "has_shop_name": result.get('shop_name') is not None,
-                            "has_category_url": result.get('category_url') is not None
-                        },
-                        "timestamp": int(time.time() * 1000),
-                        "sessionId": "debug-session",
-                        "runId": "base-info-check",
-                        "hypothesisId": "H42"
-                    }
-                    f.write(json.dumps(log_data, ensure_ascii=False) + '\n')
-            except:
-                pass
-            # #endregion
+            
             
         except Exception as e:
             logger.warning(f"Error extracting base info: {e}")
-            # #region agent log
-            import json
-            import time
-            from app.config import get_debug_log_path
-            try:
-                with open(get_debug_log_path(), 'a', encoding='utf-8') as f:
-                    log_data = {
-                        "location": "base_info_extractor.py:extract:error",
-                        "message": "Base info extraction failed",
-                        "data": {"product_url": product_url, "error": str(e)},
-                        "timestamp": int(time.time() * 1000),
-                        "sessionId": "debug-session",
-                        "runId": "base-info-check",
-                        "hypothesisId": "H43"
-                    }
-                    f.write(json.dumps(log_data, ensure_ascii=False) + '\n')
-            except:
-                pass
-            # #endregion
+            
         
         return result
     

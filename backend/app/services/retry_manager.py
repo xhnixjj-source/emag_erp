@@ -299,6 +299,28 @@ class RetryManager:
                     logger.error(
                         f"Task {task_id} failed after {retry_count} retries: {e}"
                     )
+                    # #region agent log
+                    import json as _json_final, time as _time_final
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            _f.write(_json_final.dumps({
+                                "timestamp": int(_time_final.time() * 1000),
+                                "location": "retry_manager.py:final_failure",
+                                "message": "执行重试后仍然失败",
+                                "data": {
+                                    "task_id": task_id,
+                                    "retry_count": retry_count,
+                                    "max_retries": self.max_retries,
+                                    "error_type": getattr(error_type, "name", str(error_type)),
+                                    "error_message": str(e)[:300],
+                                },
+                                "hypothesisId": "H_timeout_captcha",
+                                "runId": "retry-debug"
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        # 调试日志失败不影响主流程
+                        pass
+                    # #endregion
                     raise
                 
                 # Calculate delay

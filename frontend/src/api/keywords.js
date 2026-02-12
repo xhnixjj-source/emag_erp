@@ -20,6 +20,9 @@ export const keywordsApi = {
     return api.get('/keywords/links', { params: queryParams })
   },
   
+  // Chrome 插件提交链接
+  importChromeExtensionLinks: (items) => api.post('/keywords/links/chrome-extension', { items }),
+  
   // Get tasks (supports filtering by keyword_id, status, etc.)
   getTasks: (params = {}) => api.get('/keywords/tasks', { params }),
   

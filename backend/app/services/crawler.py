@@ -505,8 +505,10 @@ def _extract_product_links_from_search(soup: BeautifulSoup, base_url: str) -> Li
         base_url: 用于解析相对链接的基础URL
         
     Returns:
-        产品信息列表，每个包含 url, pnk_code, thumbnail_image, price
+        产品信息列表，每个包含 url, pnk_code, thumbnail_image, price, review_count, rating
     """
+    
+    
     products: List[Dict[str, Any]] = []
     processed_urls: Set[str] = set()  # 使用Set自动去重
     
@@ -538,6 +540,33 @@ def _extract_product_links_from_search(soup: BeautifulSoup, base_url: str) -> Li
             'span.product-new-price',
         ]
         
+        # 评论数选择器（优先匹配 emag 实际结构）
+        review_count_selectors = [
+            '.star-rating-text',  # emag 实际结构：包含评分和评论数的容器
+            '.star-rating-text .hidden-xs',  # 包含 "398 de review-uri" 的元素
+            '.star-rating-text .visible-xs-inline-block',  # 移动端显示 "(398)"
+            '.reviews-count',
+            '.rating-count',
+            '[data-reviews]',
+            '.product-reviews-count',
+            '.reviews-summary .count',
+            'span[itemprop="reviewCount"]',
+            'a[href*="/reviews"]',
+            'a[href*="#reviews"]',
+        ]
+        
+        # 评分选择器（优先匹配 emag 实际结构）
+        rating_selectors = [
+            '.star-rating-text .average-rating',  # emag 实际结构：评分元素
+            '.average-rating',  # 备用：直接查找评分元素
+            '.rating-value',
+            '[itemprop="ratingValue"]',
+            '.star-rating',
+            '[data-rating]',
+            '.product-rating',
+            '.reviews-general-rating',
+        ]
+        
         
         links_found = False
         selector_results = {}
@@ -563,10 +592,14 @@ def _extract_product_links_from_search(soup: BeautifulSoup, base_url: str) -> Li
                         
                         processed_urls.add(valid_url)
                         
+                        
+                        
                         # 提取缩略图
                         thumbnail_image = None
                         # 查找产品卡片中的图片
                         card = link.find_parent(class_=lambda x: x and ('card' in x.lower() or 'product' in x.lower()))
+                        
+                        
                         if not card:
                             # 尝试查找父元素中的图片
                             parent = link.parent
@@ -626,12 +659,157 @@ def _extract_product_links_from_search(soup: BeautifulSoup, base_url: str) -> Li
                                             price_parse_error = str(parse_error)
                                             continue
                         
+                        # 提取评论数和评分（优先从 .star-rating-text 容器中提取）
+                        review_count = None
+                        rating = None
+                        
+                        
+                        
+                        # 查找 .star-rating-text 容器（不限于 card 内部，也在 link 的父元素中查找）
+                        star_rating_container = None
+                        if card:
+                            star_rating_container = card.select_one('.star-rating-text')
+                        # 如果 card 中没有找到，尝试在 link 的父元素中查找
+                        if not star_rating_container:
+                            parent = link.parent
+                            if parent:
+                                star_rating_container = parent.select_one('.star-rating-text')
+                                # 如果直接父元素中没有，向上查找
+                                if not star_rating_container:
+                                    for ancestor in link.parents:
+                                        star_rating_container = ancestor.select_one('.star-rating-text')
+                                        if star_rating_container:
+                                            break
+                        
+                        
+                        
+                        if star_rating_container:
+                            # 提取评分：从 .average-rating 中提取
+                            rating_elem = star_rating_container.select_one('.average-rating')
+                            
+                            if rating_elem:
+                                rating_text = rating_elem.get_text(strip=True)
+                                if rating_text:
+                                    # 提取数字，处理 "4.66" 格式
+                                    rating_match = re.search(r'(\d+[.,]?\d*)', rating_text.replace(',', '.'))
+                                    if rating_match:
+                                        try:
+                                            rating = float(rating_match.group(1))
+                                            # 确保评分在合理范围内（0-5）
+                                            if rating > 5:
+                                                rating = rating / 10  # 可能是10分制
+                                            
+                                        except ValueError:
+                                            pass
+                                
+                            # 提取评论数：从包含 "de review-uri" 的文本中提取，或从括号中提取
+                            # 方法1：优先查找包含 "de review-uri" 文本的 span（桌面端）
+                            review_elem = None
+                            for elem in star_rating_container.find_all('span'):
+                                text = elem.get_text(strip=True)
+                                # 查找包含 "de review-uri" 的元素
+                                if 'de review-uri' in text.lower():
+                                    review_elem = elem
+                                    break
+                                # 或者查找括号格式 "(398)"
+                                elif text.startswith('(') and text.endswith(')') and text[1:-1].isdigit():
+                                    review_elem = elem
+                                    break
+                            
+                            # 方法2：如果没找到特定元素，从整个容器中提取
+                            if review_elem:
+                                review_text = review_elem.get_text(strip=True)
+                            else:
+                                # 从整个容器中提取文本，但排除评分部分
+                                container_text = star_rating_container.get_text(strip=True)
+                                # 如果已经提取到评分，从容器文本中移除评分部分
+                                if rating is not None:
+                                    # 移除评分数字（可能是 "4.66" 格式）
+                                    rating_str = str(rating)
+                                    if rating_str in container_text:
+                                        review_text = container_text.replace(rating_str, '', 1).strip()
+                                    else:
+                                        review_text = container_text
+                                else:
+                                    review_text = container_text
+                            
+                            if review_text:
+                                
+                                # 匹配 "398 de review-uri" 或 "(398)" 格式
+                                # 优先匹配 "数字 de review-uri" 格式（不区分大小写）
+                                review_match = re.search(r'(\d+)\s*de\s*review-uri', review_text, re.IGNORECASE)
+                                if not review_match:
+                                    # 备用：匹配括号中的数字 "(398)"
+                                    review_match = re.search(r'\((\d+)\)', review_text)
+                                if not review_match:
+                                    # 最后：直接提取第一个数字（但排除评分）
+                                    # 先移除评分部分（通常是第一个数字，可能是小数）
+                                    text_without_rating = review_text
+                                    if rating is not None:
+                                        # 移除评分数字
+                                        text_without_rating = re.sub(r'^\s*\d+[.,]?\d*\s*', '', text_without_rating)
+                                    review_match = re.search(r'(\d+)', text_without_rating.replace(',', '').replace('.', ''))
+                                
+                                if review_match:
+                                    try:
+                                        review_count = int(review_match.group(1))
+                                        
+                                    except ValueError:
+                                        pass
+                            
+                            # 如果从容器中未提取到，使用原来的选择器方法（不依赖 card）
+                            if review_count is None:
+                                search_context = card if card else link.parent if link.parent else None
+                                if search_context:
+                                    for review_sel in review_count_selectors:
+                                        # 跳过已经尝试过的 .star-rating-text
+                                        if review_sel.startswith('.star-rating-text'):
+                                            continue
+                                        review_elem = search_context.select_one(review_sel)
+                                        if review_elem:
+                                            review_text = review_elem.get_text(strip=True)
+                                            if review_text:
+                                                # 提取数字，处理 "123 reviews" 或 "123 recenzii" 等格式
+                                                review_match = re.search(r'(\d+)', review_text.replace(',', '').replace('.', ''))
+                                                if review_match:
+                                                    try:
+                                                        review_count = int(review_match.group(1))
+                                                        break
+                                                    except ValueError:
+                                                        continue
+                            
+                            # 如果评分未提取到，使用原来的选择器方法（不依赖 card）
+                            if rating is None:
+                                search_context = card if card else link.parent if link.parent else None
+                                if search_context:
+                                    for rating_sel in rating_selectors:
+                                        # 跳过已经尝试过的选择器
+                                        if rating_sel.startswith('.star-rating-text') or rating_sel == '.average-rating':
+                                            continue
+                                        rating_elem = search_context.select_one(rating_sel)
+                                        if rating_elem:
+                                            rating_text = rating_elem.get_text(strip=True)
+                                            if rating_text:
+                                                # 提取数字，处理 "4.5" 或 "4,5" 等格式
+                                                rating_match = re.search(r'(\d+[.,]?\d*)', rating_text.replace(',', '.'))
+                                                if rating_match:
+                                                    try:
+                                                        rating = float(rating_match.group(1))
+                                                        # 确保评分在合理范围内（0-5）
+                                                        if rating > 5:
+                                                            rating = rating / 10  # 可能是10分制
+                                                        break
+                                                    except ValueError:
+                                                        continue
+                        
                         
                         products.append({
                             'url': valid_url,
                             'pnk_code': _extract_pnk_code_from_url(valid_url),
                             'thumbnail_image': thumbnail_image,
-                            'price': price
+                            'price': price,
+                            'review_count': review_count,
+                            'rating': rating
                         })
                         valid_count += 1
                     
@@ -663,7 +841,9 @@ def _extract_product_links_from_search(soup: BeautifulSoup, base_url: str) -> Li
                             'url': valid_url,
                             'pnk_code': _extract_pnk_code_from_url(valid_url),
                             'thumbnail_image': None,
-                            'price': None
+                            'price': None,
+                            'review_count': None,
+                            'rating': None
                         })
                         pd_links_valid += 1
             
@@ -1460,8 +1640,11 @@ def handle_keyword_search_task(task_id: int, task: CrawlTask, db: Session) -> Di
                     pnk_code=product_info.get('pnk_code'),
                     thumbnail_image=product_info.get('thumbnail_image'),
                     price=product_info.get('price'),
+                    review_count=product_info.get('review_count'),
+                    rating=product_info.get('rating'),
                     status="active"
                 )
+                
                 db.add(link)
                 saved_count += 1
             else:
@@ -1472,6 +1655,15 @@ def handle_keyword_search_task(task_id: int, task: CrawlTask, db: Session) -> Di
                     existing.thumbnail_image = product_info.get('thumbnail_image')
                 if existing.price is None and product_info.get('price') is not None:
                     existing.price = product_info.get('price')
+                # 更新评论数和评分（如果为空或需要更新）
+                updated_fields = []
+                if existing.review_count is None and product_info.get('review_count') is not None:
+                    existing.review_count = product_info.get('review_count')
+                    updated_fields.append('review_count')
+                if existing.rating is None and product_info.get('rating') is not None:
+                    existing.rating = product_info.get('rating')
+                    updated_fields.append('rating')
+                
                 skipped_count += 1
         
         # 提交数据库更改
@@ -1560,6 +1752,7 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
             raise ValueError(f"Product URL not specified for task {task_id}")
         
         product_url = task.product_url
+        print(f"[任务开始] 产品爬取任务处理 - 任务ID: {task_id}, 产品URL: {product_url}")
         logger.info(f"[任务开始] 产品爬取任务处理 - 任务ID: {task_id}, 产品URL: {product_url}")
         
         # Update task progress
@@ -1592,6 +1785,16 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
         
         logger.info(f"[爬取完成] 产品数据爬取完成 - 任务ID: {task_id}, 产品URL: {product_url}, 数据字段数: {len(product_data)}")
         
+        # #region agent log
+        import json as _json_save
+        _ranking_keys = ['category_rank', 'ad_category_rank', 'store_rank', 'shop_rank', 'ad_rank']
+        _basic_keys = ['title', 'product_name', 'price', 'stock_count', 'stock', 'review_count', 'brand', 'shop_name', 'latest_review_date', 'latest_review_at', 'listed_at']
+        _ranking_data = {k: product_data.get(k) for k in _ranking_keys}
+        _basic_data = {k: str(product_data.get(k))[:50] if product_data.get(k) is not None else None for k in _basic_keys}
+        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+            _f.write(_json_save.dumps({"timestamp": int(time.time()*1000), "location": "crawler.py:product_data_received", "message": "爬取结果数据", "data": {"task_id": task_id, "url": product_url, "all_keys": list(product_data.keys()), "ranking": _ranking_data, "basic": _basic_data, "total_fields": len(product_data)}, "hypothesisId": "G1,G2", "runId": "field-debug"}, default=str) + "\n")
+        # #endregion
+        
         # Update task progress
         task.progress = 80
         db.commit()
@@ -1604,15 +1807,27 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
         
         if existing:
             # Update existing record
+            # #region agent log
+            _matched = [k for k in product_data.keys() if k != 'product_url' and hasattr(existing, k)]
+            _dropped = [k for k in product_data.keys() if k != 'product_url' and not hasattr(existing, k)]
+            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(_json_save.dumps({"timestamp": int(time.time()*1000), "location": "crawler.py:update_existing", "message": "更新现有记录-字段匹配", "data": {"task_id": task_id, "url": product_url, "is_new": False, "matched_fields": _matched, "dropped_fields": _dropped, "existing_shop_rank": existing.shop_rank, "existing_category_rank": existing.category_rank, "existing_ad_rank": existing.ad_rank, "existing_stock": existing.stock, "existing_product_name": str(existing.product_name)[:50] if existing.product_name else None}, "hypothesisId": "G1,G4", "runId": "field-debug"}, default=str) + "\n")
+            # #endregion
+            
             for key, value in product_data.items():
                 if key != 'product_url' and hasattr(existing, key):
                     setattr(existing, key, value)
             existing.crawled_at = datetime.utcnow()
             db.commit()
+            
             logger.info(f"[数据保存] 更新现有产品数据 - 任务ID: {task_id}, 产品URL: {product_url}")
         else:
             # Create new record
             # 注意：ProductDataCrawler返回的字段名可能与FilterPool不同，需要映射
+            shop_rank_value = product_data.get('store_rank') or product_data.get('shop_rank')
+            category_rank_value = product_data.get('category_rank')
+            ad_rank_value = product_data.get('ad_category_rank') or product_data.get('ad_rank')
+            
             filter_pool_item = FilterPool(
                 product_url=product_data['product_url'],
                 product_name=product_data.get('title') or product_data.get('product_name'),  # 新格式使用title
@@ -1625,15 +1840,20 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
                 review_count=product_data.get('review_count'),
                 latest_review_at=product_data.get('latest_review_date') or product_data.get('latest_review_at'),  # 新格式使用latest_review_date
                 earliest_review_at=product_data.get('earliest_review_at'),
-                shop_rank=product_data.get('store_rank') or product_data.get('shop_rank'),  # 新格式使用store_rank
-                category_rank=product_data.get('category_rank'),
-                ad_rank=product_data.get('ad_category_rank') or product_data.get('ad_rank'),  # 新格式使用ad_category_rank
+                shop_rank=shop_rank_value,  # 新格式使用store_rank
+                category_rank=category_rank_value,
+                ad_rank=ad_rank_value,  # 新格式使用ad_category_rank
                 is_fbe=product_data.get('is_fbe', False),
                 competitor_count=product_data.get('competitor_count', 0),
                 crawled_at=datetime.utcnow()
             )
             db.add(filter_pool_item)
             db.commit()
+            
+            # #region agent log
+            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(_json_save.dumps({"timestamp": int(time.time()*1000), "location": "crawler.py:insert_new", "message": "插入新记录", "data": {"task_id": task_id, "url": product_url, "is_new": True, "shop_rank": shop_rank_value, "category_rank": category_rank_value, "ad_rank": ad_rank_value, "price": product_data.get('price'), "stock": product_data.get('stock_count') or product_data.get('stock'), "product_name": str(product_data.get('title') or product_data.get('product_name'))[:50]}, "hypothesisId": "G1,G4", "runId": "field-debug"}, default=str) + "\n")
+            # #endregion
             logger.info(f"[数据保存] 添加新产品数据 - 任务ID: {task_id}, 产品URL: {product_url}")
         
         
@@ -1655,7 +1875,29 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
     except Exception as e:
         total_elapsed = time.time() - start_time if 'start_time' in locals() else 0
         logger.error(f"[任务失败] 产品爬取任务失败 - 任务ID: {task_id}, 产品URL: {task.product_url if task else 'N/A'}, 错误: {str(e)}, 错误类型: {type(e).__name__}, 耗时: {total_elapsed:.2f}秒", exc_info=True)
-        
+        # #region agent log
+        import json as _json_fail, time as _time_fail
+        try:
+            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(_json_fail.dumps({
+                    "timestamp": int(_time_fail.time() * 1000),
+                    "location": "crawler.py:task_failed",
+                    "message": "产品爬取任务最终失败",
+                    "data": {
+                        "task_id": task_id,
+                        "product_url": task.product_url if task else None,
+                        "error_type": type(e).__name__,
+                        "error_message": str(e)[:300],
+                        "elapsed_sec": round(total_elapsed, 2),
+                    },
+                    "hypothesisId": "H_timeout_captcha",
+                    "runId": "retry-debug"
+                }, ensure_ascii=False) + "\n")
+        except Exception:
+            # 调试日志失败不影响主流程
+            pass
+        # #endregion
+
         # 更新任务状态为失败
         if task:
             task.status = TaskStatus.FAILED
@@ -1666,6 +1908,248 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
                 db.rollback()
         
         raise
+
+# ============================================================================
+# Batch Crawling Functions (Multi-threaded)
+# ============================================================================
+
+def batch_crawl_keywords(
+    keyword_ids: List[int],
+    db: Session,
+    max_workers: Optional[int] = None
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Batch crawl multiple keywords concurrently using thread pool
+    
+    Args:
+        keyword_ids: List of keyword IDs to crawl
+        db: Database session
+        max_workers: Maximum number of worker threads (default from config)
+        
+    Returns:
+        Dictionary mapping keyword_id to results
+    """
+    results = {}
+    
+    def _crawl_single_keyword(keyword_id: int) -> tuple:
+        """Crawl a single keyword"""
+        db_session = SessionLocal()
+        try:
+            keyword = db_session.query(Keyword).filter(Keyword.id == keyword_id).first()
+            if not keyword:
+                return keyword_id, {"error": "Keyword not found"}
+            
+            # Create a temporary task for progress tracking
+            task = CrawlTask(
+                task_type=TaskType.KEYWORD_SEARCH,
+                keyword_id=keyword_id,
+                user_id=keyword.created_by_user_id,
+                status=TaskStatus.PROCESSING,
+                priority=TaskPriority.NORMAL
+            )
+            db_session.add(task)
+            db_session.commit()
+            db_session.refresh(task)
+            
+            try:
+                result = handle_keyword_search_task(task.id, task, db_session)
+                return keyword_id, result
+            except Exception as e:
+                logger.error(f"Error crawling keyword {keyword_id}: {e}")
+                return keyword_id, {"error": str(e)}
+        finally:
+            db_session.close()
+    
+    # Use thread pool for concurrent crawling
+    pool_name = "keyword_search"
+    if max_workers is None:
+        max_workers = config.KEYWORD_SEARCH_THREADS
+    
+    futures = []
+    for keyword_id in keyword_ids:
+        future = thread_pool_manager.submit(pool_name, _crawl_single_keyword, keyword_id)
+        futures.append(future)
+    
+    # Collect results
+    for future in as_completed(futures):
+        try:
+            keyword_id, result = future.result()
+            results[keyword_id] = result
+        except Exception as e:
+            logger.error(f"Error getting result from keyword crawl: {e}")
+    
+    return results
+
+def batch_crawl_products(
+    product_urls: List[str],
+    db: Session,
+    max_workers: Optional[int] = None,
+    task_id: Optional[int] = None
+) -> Dict[str, Optional[Dict[str, Any]]]:
+    """
+    Batch crawl multiple products concurrently using thread pool
+    
+    Args:
+        product_urls: List of product URLs to crawl
+        db: Database session
+        max_workers: Maximum number of worker threads (default from config)
+        task_id: Optional parent task ID for progress tracking
+        
+    Returns:
+        Dictionary mapping product_url to crawled data (or None if failed)
+    """
+    results = {}
+    
+    def _crawl_single_product(product_url: str) -> tuple:
+        """Crawl a single product"""
+        db_session = SessionLocal()
+        try:
+            product_data = crawl_product_details(
+                product_url=product_url,
+                task_id=task_id,
+                db=db_session
+            )
+            return product_url, product_data
+        except Exception as e:
+            logger.error(f"Error crawling product {product_url}: {e}")
+            return product_url, None
+        finally:
+            db_session.close()
+    
+    # Use thread pool for concurrent crawling
+    pool_name = "product_crawl"
+    if max_workers is None:
+        max_workers = config.PRODUCT_CRAWL_THREADS
+    
+    futures = []
+    for url in product_urls:
+        future = thread_pool_manager.submit(pool_name, _crawl_single_product, url)
+        futures.append(future)
+    
+    # Collect results and save to database
+    successful_count = 0
+    failed_count = 0
+    
+    for future in as_completed(futures):
+        try:
+            product_url, product_data = future.result()
+            results[product_url] = product_data
+            
+            if product_data:
+                # Save to filter_pool
+                db_session = SessionLocal()
+                try:
+                    existing = db_session.query(FilterPool).filter(
+                        FilterPool.product_url == product_url
+                    ).first()
+                    
+                    if existing:
+                        # Update existing
+                        for key, value in product_data.items():
+                            if key != 'product_url' and hasattr(existing, key):
+                                setattr(existing, key, value)
+                        existing.crawled_at = datetime.utcnow()
+                    else:
+                        # Create new
+                        filter_pool_item = FilterPool(
+                            product_url=product_data['product_url'],
+                            product_name=product_data.get('product_name'),
+                            thumbnail_image=product_data.get('thumbnail_image'),
+                            brand=product_data.get('brand'),
+                            shop_name=product_data.get('shop_name'),
+                            price=product_data.get('price'),
+                            listed_at=product_data.get('listed_at'),
+                            stock=product_data.get('stock'),
+                            review_count=product_data.get('review_count'),
+                            latest_review_at=product_data.get('latest_review_at'),
+                            earliest_review_at=product_data.get('earliest_review_at'),
+                            shop_rank=product_data.get('shop_rank'),
+                            category_rank=product_data.get('category_rank'),
+                            ad_rank=product_data.get('ad_rank'),
+                            is_fbe=product_data.get('is_fbe', False),
+                            competitor_count=product_data.get('competitor_count', 0),
+                            crawled_at=datetime.utcnow()
+                        )
+                        db_session.add(filter_pool_item)
+                    
+                    db_session.commit()
+                    successful_count += 1
+                except Exception as e:
+                    logger.error(f"Error saving product {product_url} to database: {e}")
+                    db_session.rollback()
+                    failed_count += 1
+                finally:
+                    db_session.close()
+            else:
+                failed_count += 1
+                
+        except Exception as e:
+            logger.error(f"Error getting result from product crawl: {e}")
+            failed_count += 1
+    
+    logger.info(
+        f"Batch product crawl completed: {successful_count} successful, "
+        f"{failed_count} failed out of {len(product_urls)} total"
+    )
+    
+    return results
+
+def batch_crawl_keyword_links(
+    keyword_id: int,
+    db: Session,
+    max_workers: Optional[int] = None,
+    batch_size: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Batch crawl all product links for a keyword
+    
+    Args:
+        keyword_id: Keyword ID
+        db: Database session
+        max_workers: Maximum number of worker threads
+        batch_size: Number of URLs to process in each batch (for memory management)
+        
+    Returns:
+        Dictionary with crawl statistics
+    """
+    # Get all links for keyword
+    links = db.query(KeywordLink).filter(
+        KeywordLink.keyword_id == keyword_id,
+        KeywordLink.status == "active"
+    ).all()
+    
+    if not links:
+        return {
+            "keyword_id": keyword_id,
+            "total_links": 0,
+            "crawled": 0,
+            "failed": 0
+        }
+    
+    product_urls = [link.product_url for link in links]
+    
+    # Use batch processing if batch_size is specified
+    if batch_size:
+        all_results = {}
+        for i in range(0, len(product_urls), batch_size):
+            batch = product_urls[i:i + batch_size]
+            batch_results = batch_crawl_products(batch, db, max_workers=max_workers)
+            all_results.update(batch_results)
+        results = all_results
+    else:
+        results = batch_crawl_products(product_urls, db, max_workers=max_workers)
+    
+    # Calculate statistics
+    successful = sum(1 for v in results.values() if v is not None)
+    failed = len(results) - successful
+    
+    return {
+        "keyword_id": keyword_id,
+        "total_links": len(product_urls),
+        "crawled": successful,
+        "failed": failed
+    }
+
 
 # ============================================================================
 # Batch Crawling Functions (Multi-threaded)

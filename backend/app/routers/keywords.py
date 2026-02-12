@@ -9,7 +9,7 @@ from app.database import get_db
 from app.middleware.auth_middleware import require_auth
 from app.models.keyword import Keyword, KeywordLink, KeywordStatus
 from app.models.crawl_task import CrawlTask, TaskType, TaskStatus, TaskPriority, ErrorLog
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.services.task_manager import task_manager
 from app.services.operation_log_service import create_operation_log
 from app.services.crawler import crawl_keyword_search
@@ -40,11 +40,44 @@ class KeywordLinkResponse(BaseModel):
     pnk_code: Optional[str] = None  # PNK_CODE（产品编码）
     thumbnail_image: Optional[str] = None  # 产品缩略图URL
     price: Optional[float] = None  # 售价
+    review_count: Optional[int] = None  # 评论数
+    rating: Optional[float] = None  # 评分
     crawled_at: datetime
     status: str
+    # Chrome 插件扩展字段
+    product_title: Optional[str] = None  # 产品标题
+    brand: Optional[str] = None  # 品牌
+    category: Optional[str] = None  # 类目
+    commission_rate: Optional[float] = None  # 佣金比例(%)
+    offer_count: Optional[int] = None  # 跟卖数
+    purchase_price: Optional[float] = None  # 采购价
+    last_offer_period: Optional[str] = None  # 最近offer周期
+    tag: Optional[str] = None  # 标签
+    source: Optional[str] = "keyword_search"  # 来源
 
     class Config:
         from_attributes = True
+
+class ChromeExtensionLinkItem(BaseModel):
+    """Chrome 插件提交的单条链接数据"""
+    brand: Optional[str] = None
+    category: Optional[str] = None
+    commission_rate: Optional[float] = None
+    image_url: Optional[str] = None
+    keyword: str
+    last_offer_period: Optional[str] = None
+    min_price: Optional[float] = None
+    offer_count: Optional[int] = None
+    pnk: Optional[str] = None
+    product_title: Optional[str] = None
+    product_url: str
+    purchase_price: Optional[float] = None
+    scraped_at: Optional[str] = None
+    tag: Optional[str] = None
+
+class ChromeExtensionLinksRequest(BaseModel):
+    """Chrome 插件提交链接请求 - 支持单条或批量"""
+    items: List[ChromeExtensionLinkItem]
 
 class TaskResponse(BaseModel):
     """Task response model"""
@@ -209,7 +242,15 @@ async def get_keyword_links(
     skip: int = 0,
     limit: int = 100,
     price_min: Optional[float] = None,
-    price_max: Optional[float] = None
+    price_max: Optional[float] = None,
+    review_count_min: Optional[int] = None,
+    review_count_max: Optional[int] = None,
+    rating_min: Optional[float] = None,
+    rating_max: Optional[float] = None,
+    crawled_at_start: Optional[str] = None,
+    crawled_at_end: Optional[str] = None,
+    source: Optional[str] = None,
+    tag: Optional[str] = None
 ):
     """Get keyword links with optional filters"""
     query = db.query(KeywordLink)
@@ -219,6 +260,30 @@ async def get_keyword_links(
         query = query.filter(KeywordLink.price >= price_min)
     if price_max is not None:
         query = query.filter(KeywordLink.price <= price_max)
+    if review_count_min is not None:
+        query = query.filter(KeywordLink.review_count >= review_count_min)
+    if review_count_max is not None:
+        query = query.filter(KeywordLink.review_count <= review_count_max)
+    if rating_min is not None:
+        query = query.filter(KeywordLink.rating >= rating_min)
+    if rating_max is not None:
+        query = query.filter(KeywordLink.rating <= rating_max)
+    if source:
+        query = query.filter(KeywordLink.source == source)
+    if tag:
+        query = query.filter(KeywordLink.tag == tag)
+    if crawled_at_start:
+        try:
+            start_date = datetime.fromisoformat(crawled_at_start.replace('Z', '+00:00'))
+            query = query.filter(KeywordLink.crawled_at >= start_date)
+        except ValueError:
+            pass
+    if crawled_at_end:
+        try:
+            end_date = datetime.fromisoformat(crawled_at_end.replace('Z', '+00:00'))
+            query = query.filter(KeywordLink.crawled_at <= end_date)
+        except ValueError:
+            pass
     
     # 获取总数
     total = query.count()
@@ -232,6 +297,152 @@ async def get_keyword_links(
         "skip": skip,
         "limit": limit
     }
+
+@router.post("/links/chrome-extension")
+async def import_chrome_extension_links(
+    request: ChromeExtensionLinksRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Chrome 插件提交链接到链接初筛（无需认证，局域网直接调用）
+    - 如果关键字已存在，则新建一个 'keyword super hot' 的关键字以示区别
+    - 将链接数据写入 keyword_links 表，标记来源为 chrome_extension
+    """
+    # 获取默认用户（第一个管理员用户）
+    default_user = db.query(User).filter(User.role == UserRole.ADMIN).first()
+    if not default_user:
+        default_user = db.query(User).first()
+    if not default_user:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="系统中没有可用用户，请先创建用户"
+        )
+    user_id = default_user.id
+    
+    logger.info(f"[Chrome插件] 收到链接导入请求 - 默认用户ID: {user_id}, 链接数: {len(request.items)}")
+    
+    created_count = 0
+    skipped_count = 0
+    keyword_cache = {}  # 缓存已查找/创建的关键字，避免重复查询
+    
+    try:
+        for item in request.items:
+            # 检查是否已存在相同 product_url 的链接（去重）
+            existing_link = db.query(KeywordLink).filter(
+                KeywordLink.product_url == item.product_url
+            ).first()
+            if existing_link:
+                skipped_count += 1
+                logger.debug(f"[Chrome插件] 跳过已存在的链接: {item.product_url}")
+                continue
+            
+            # 查找或创建关键字
+            keyword_str = item.keyword.strip()
+            if keyword_str in keyword_cache:
+                keyword_obj = keyword_cache[keyword_str]
+            else:
+                # 检查数据库中是否已有该关键字（不限用户）
+                existing_keyword = db.query(Keyword).filter(
+                    Keyword.keyword == keyword_str
+                ).first()
+                
+                if existing_keyword:
+                    # 关键字已存在，使用 "keyword super hot" 作为新关键字名
+                    super_hot_keyword_str = f"{keyword_str} super hot"
+                    # 检查 super hot 版本是否也已存在
+                    existing_super_hot = db.query(Keyword).filter(
+                        Keyword.keyword == super_hot_keyword_str
+                    ).first()
+                    
+                    if existing_super_hot:
+                        keyword_obj = existing_super_hot
+                    else:
+                        keyword_obj = Keyword(
+                            keyword=super_hot_keyword_str,
+                            created_by_user_id=user_id,
+                            status=KeywordStatus.COMPLETED
+                        )
+                        db.add(keyword_obj)
+                        db.flush()  # 获取 ID
+                        logger.info(f"[Chrome插件] 创建新关键字: '{super_hot_keyword_str}' (原关键字 '{keyword_str}' 已存在)")
+                else:
+                    # 关键字不存在，直接创建
+                    keyword_obj = Keyword(
+                        keyword=keyword_str,
+                        created_by_user_id=user_id,
+                        status=KeywordStatus.COMPLETED
+                    )
+                    db.add(keyword_obj)
+                    db.flush()
+                    logger.info(f"[Chrome插件] 创建新关键字: '{keyword_str}'")
+                
+                keyword_cache[keyword_str] = keyword_obj
+            
+            # 处理 scraped_at 时间
+            crawled_at = None
+            if item.scraped_at:
+                try:
+                    crawled_at = datetime.fromisoformat(item.scraped_at.replace('Z', '+00:00'))
+                except (ValueError, AttributeError):
+                    crawled_at = None
+            
+            # 创建链接记录
+            link = KeywordLink(
+                keyword_id=keyword_obj.id,
+                product_url=item.product_url,
+                pnk_code=item.pnk,
+                thumbnail_image=item.image_url,
+                price=item.min_price,
+                product_title=item.product_title,
+                brand=item.brand,
+                category=item.category,
+                commission_rate=item.commission_rate,
+                offer_count=item.offer_count,
+                purchase_price=item.purchase_price,
+                last_offer_period=item.last_offer_period,
+                tag=item.tag,
+                source="chrome_extension",
+                status="active"
+            )
+            if crawled_at:
+                link.crawled_at = crawled_at
+            
+            db.add(link)
+            created_count += 1
+        
+        db.commit()
+        
+        # 记录操作日志
+        create_operation_log(
+            db=db,
+            user_id=user_id,
+            operation_type="chrome_extension_import",
+            target_type="keyword_link",
+            operation_detail={
+                "created_count": created_count,
+                "skipped_count": skipped_count,
+                "total_items": len(request.items)
+            }
+        )
+        
+        logger.info(f"[Chrome插件] 导入完成 - 创建: {created_count}, 跳过(已存在): {skipped_count}")
+        
+        return {
+            "success": True,
+            "created_count": created_count,
+            "skipped_count": skipped_count,
+            "total_items": len(request.items),
+            "message": f"成功导入 {created_count} 条链接，跳过 {skipped_count} 条已存在链接"
+        }
+    
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[Chrome插件] 导入失败: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"导入失败: {str(e)}"
+        )
+
 
 class BatchCrawlLinksRequest(BaseModel):
     """Batch crawl links request model"""
