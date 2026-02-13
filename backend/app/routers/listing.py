@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from app.database import get_db
 from app.middleware.auth_middleware import require_auth
-from app.models.listing import ListingPool, ListingStatus, ListingDetails
+from app.models.listing import ListingPool, ListingStatus, ListingDetails, ProfitCalculation
 from app.models.monitor_pool import MonitorPool, MonitorStatus
 from app.services.permission import require_product_edit_permission, check_product_lock
 from app.services.operation_log_service import create_operation_log
@@ -222,6 +222,19 @@ async def update_listing_status(
         )
     
     old_status = listing.status
+    
+    # Validate that profit calculation exists before allowing listing
+    if new_status == ListingStatus.LISTED:
+        profit_calc = db.query(ProfitCalculation).filter(
+            ProfitCalculation.listing_pool_id == listing_id
+        ).first()
+        
+        if not profit_calc or profit_calc.profit_margin is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="请先在利润测算页完成利润测算后才能上架产品"
+            )
+    
     listing.status = new_status
     
     # Auto-lock when status changes to "listed"

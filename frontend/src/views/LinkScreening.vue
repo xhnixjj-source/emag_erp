@@ -101,6 +101,23 @@
             <el-option label="近1.5年" value="1.5years" />
           </el-select>
         </el-form-item>
+        <el-form-item label="品牌剔除">
+          <el-select
+            v-model="filters.exclude_brands"
+            placeholder="选择要剔除的品牌"
+            multiple
+            filterable
+            clearable
+            style="width: 300px"
+          >
+            <el-option
+              v-for="brand in brands"
+              :key="brand"
+              :label="brand"
+              :value="brand"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="爬取时间">
           <el-date-picker
             v-model="filters.crawled_at_range"
@@ -291,6 +308,7 @@ const batchCrawling = ref(false)
 const batchGettingListedAt = ref(false)
 const links = ref([])
 const keywords = ref([])
+const brands = ref([])
 const selectedLinks = ref([])
 const selectAll = ref(false)
 const selectedKeywordId = ref(null)
@@ -310,7 +328,8 @@ const filters = reactive({
   tag: null,
   offer_count_min: null,
   offer_count_max: null,
-  listed_at_period: null
+  listed_at_period: null,
+  exclude_brands: []
 })
 
 const loadKeywords = async () => {
@@ -319,6 +338,52 @@ const loadKeywords = async () => {
     keywords.value = response.data || response
   } catch (error) {
     ElMessage.error('加载关键字列表失败')
+  }
+}
+
+const loadBrands = async () => {
+  try {
+    const response = await keywordsApi.getBrands()
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        location: 'LinkScreening.vue:loadBrands',
+        message: 'loadBrands success',
+        data: {
+          rawResponseKeys: Object.keys(response || {}),
+          brandsFromData: Array.isArray(response?.data?.brands) ? response.data.brands.length : null,
+          brandsFromRoot: Array.isArray(response?.brands) ? response.brands.length : null
+        },
+        runId: 'pre-fix-1',
+        hypothesisId: 'H1,H2,H3,H4',
+        timestamp: Date.now()
+      })
+    }).catch(() => {})
+    // #endregion
+
+    brands.value = response.data?.brands || response.brands || []
+  } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        location: 'LinkScreening.vue:loadBrands',
+        message: 'loadBrands error',
+        data: {
+          errorMessage: error?.message || String(error || ''),
+          errorName: error?.name || null
+        },
+        runId: 'pre-fix-1',
+        hypothesisId: 'H2,H3,H4',
+        timestamp: Date.now()
+      })
+    }).catch(() => {})
+    // #endregion
+
+    ElMessage.error('加载品牌列表失败')
   }
 }
 
@@ -368,6 +433,11 @@ const loadLinks = async () => {
       params.listed_at_period = filters.listed_at_period
     }
     
+    // 处理品牌剔除筛选
+    if (filters.exclude_brands && filters.exclude_brands.length > 0) {
+      params.exclude_brands = filters.exclude_brands
+    }
+    
     // 调用 API（不传 keywordId，而是通过 params 传递）
     const response = await keywordsApi.getKeywordLinks(null, params)
     
@@ -384,6 +454,15 @@ const loadLinks = async () => {
       links.value = Array.isArray(response) ? response : []
       total.value = links.value.length
     }
+
+    // 根据当前筛选后的链接列表动态生成可用品牌列表
+    const brandSet = new Set()
+    links.value.forEach(link => {
+      if (link && link.brand) {
+        brandSet.add(link.brand)
+      }
+    })
+    brands.value = Array.from(brandSet).sort()
   } catch (error) {
     console.error('加载链接失败:', error)
     ElMessage.error('加载链接失败: ' + (error.response?.data?.detail || error.message || '未知错误'))
@@ -407,6 +486,7 @@ const resetFilters = () => {
   filters.offer_count_min = null
   filters.offer_count_max = null
   filters.listed_at_period = null
+  filters.exclude_brands = []
   loadLinks()
 }
 

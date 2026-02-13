@@ -138,6 +138,45 @@
             />
           </template>
         </el-table-column>
+        <el-table-column label="售价(€)" width="120">
+          <template #default="{ row }">
+            <span v-if="row.sale_price">{{ row.sale_price.toFixed(2) }}</span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="利润额(€)" width="120">
+          <template #default="{ row }">
+            <span 
+              v-if="row.profit_amount !== null && row.profit_amount !== undefined"
+              :class="row.profit_amount >= 0 ? 'profit-positive' : 'profit-negative'"
+            >
+              {{ row.profit_amount.toFixed(2) }}
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="利润率(%)" width="120">
+          <template #default="{ row }">
+            <span 
+              v-if="row.profit_margin !== null && row.profit_margin !== undefined"
+              :class="row.profit_margin >= 0 ? 'profit-positive' : 'profit-negative'"
+            >
+              {{ row.profit_margin.toFixed(2) }}%
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="ROI(%)" width="100">
+          <template #default="{ row }">
+            <span 
+              v-if="row.roi !== null && row.roi !== undefined"
+              :class="row.roi >= 0 ? 'profit-positive' : 'profit-negative'"
+            >
+              {{ row.roi.toFixed(2) }}%
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="类目名称" width="150">
           <template #default="{ row }">
             <el-input
@@ -447,8 +486,19 @@ const handleList = async (row) => {
     ElMessage.success('上架成功')
     await loadProfitList()
   } catch (error) {
-    if (error !== 'cancel') {
-      throw error
+    if (error === 'cancel') {
+      return
+    }
+    // Handle API errors
+    if (error.response && error.response.status === 400) {
+      const errorMessage = error.response.data?.detail || '上架失败，请检查产品信息'
+      ElMessage.error(errorMessage)
+      // If error mentions profit calculation, suggest editing the product
+      if (errorMessage.includes('利润测算')) {
+        ElMessage.warning('请先填写完整的产品信息（采购价、尺寸、重量等）并保存后再上架')
+      }
+    } else {
+      ElMessage.error('上架失败：' + (error.message || '未知错误'))
     }
   }
 }

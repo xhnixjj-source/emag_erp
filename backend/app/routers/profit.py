@@ -13,8 +13,11 @@ from app.models.listing import ListingPool, ProfitCalculation, ListingStatus
 from app.models.monitor_pool import MonitorPool
 from app.models.product import FilterPool
 from app.models.user import User
+from app.models.profit_config import ProfitConfig
 from app.services.permission import require_product_edit_permission
 from app.services.operation_log_service import create_operation_log
+from app.services.profit_engine import ProfitEngine
+from decimal import Decimal
 
 
 
@@ -81,13 +84,17 @@ class ProfitListResponse(BaseModel):
     height: Optional[float] = None
     weight: Optional[float] = None
     purchase_price: Optional[float] = None
+    sale_price: Optional[float] = None  # 售价（含VAT）
     profit_amount: Optional[float] = None
     profit_margin: Optional[float] = None
     profit_margin_without_vat: Optional[float] = None
+    roi: Optional[float] = None  # ROI (%)
     category_name: Optional[str] = None
     platform_commission: Optional[float] = None
     auto_commission_rate: Optional[float] = None  # 自动获取的佣金费率
     platform_commission_amount: Optional[float] = None
+    vat_amount: Optional[float] = None  # VAT金额
+    logistics_cost: Optional[float] = None  # 物流成本
     domestic_logistics: Optional[float] = None
     shipping_cost: Optional[float] = None
     status: str
@@ -137,6 +144,9 @@ def calculate_profit(
     """
     Calculate profit amount, margin, margin without VAT, and platform commission amount
     Returns: (profit_amount, profit_margin, profit_margin_without_vat, platform_commission_amount)
+    
+    This function now uses ProfitEngine for calculation, but maintains backward compatibility
+    with the existing return signature.
     """
     # Get product price from filter pool
     listing = db.query(ListingPool).filter(ListingPool.id == listing_pool_id).first()
@@ -158,31 +168,62 @@ def calculate_profit(
     if not price:
         return 0.0, 0.0, 0.0, 0.0
     
-    # Calculate platform commission amount
-    platform_commission_amount = price * (platform_commission / 100) if platform_commission else 0.0
+    # Get profit calculation record for dimensions and weight
+    calc = db.query(ProfitCalculation).filter(
+        ProfitCalculation.listing_pool_id == listing_pool_id
+    ).first()
     
-    # Calculate VAT amount
-    vat_amount = price * (vat / 100) if vat else 0.0
+    # Get default config from ProfitConfig
+    config = get_or_create_profit_config(db)
     
-    # Calculate total costs
-    total_costs = (
-        purchase_price +
-        shipping_cost +
-        order_fee +
-        storage_fee +
-        platform_commission_amount +
-        vat_amount
+    # Use values from calc if available, otherwise use defaults or provided values
+    weight_kg = Decimal(str(calc.weight)) if calc and calc.weight is not None else Decimal("0")
+    length_cm = Decimal(str(calc.length)) if calc and calc.length is not None else Decimal("0")
+    width_cm = Decimal(str(calc.width)) if calc and calc.width is not None else Decimal("0")
+    height_cm = Decimal(str(calc.height)) if calc and calc.height is not None else Decimal("0")
+    
+    # Use provided values or defaults from config
+    shipping_cost_fixed = Decimal(str(shipping_cost)) if shipping_cost is not None else Decimal(str(config.default_shipping_cost))
+    order_fee_val = Decimal(str(order_fee)) if order_fee is not None else Decimal(str(config.default_order_fee))
+    storage_fee_val = Decimal(str(storage_fee)) if storage_fee is not None else Decimal(str(config.default_storage_fee))
+    commission_rate = Decimal(str(platform_commission / 100)) if platform_commission is not None else Decimal(str(config.default_platform_commission / 100))
+    vat_rate = Decimal(str(vat / 100)) if vat is not None else Decimal(str(config.default_vat_rate / 100))
+    
+    # Optional weight-based shipping
+    shipping_price_per_kg = None
+    if config.shipping_price_per_kg is not None:
+        shipping_price_per_kg = Decimal(str(config.shipping_price_per_kg))
+    
+    # Call ProfitEngine
+    result = ProfitEngine.calculate_profit(
+        sale_price_gross=Decimal(str(price)),
+        purchase_cost=Decimal(str(purchase_price)),
+        weight_kg=weight_kg,
+        length_cm=length_cm,
+        width_cm=width_cm,
+        height_cm=height_cm,
+        vat_rate=vat_rate,
+        commission_rate=commission_rate,
+        shipping_cost_fixed=shipping_cost_fixed,
+        order_fee=order_fee_val,
+        storage_fee=storage_fee_val,
+        shipping_price_per_kg=shipping_price_per_kg,
     )
     
-    # Calculate profit
-    profit_amount = price - total_costs
-    profit_margin = (profit_amount / price * 100) if price > 0 else 0.0
+    # Calculate profit margin without VAT for backward compatibility
+    # This matches the old calculation: profit_amount / (price - vat_amount) * 100
+    price_without_vat = Decimal(str(price)) - result.vat_amount
+    profit_margin_without_vat = (
+        float(result.net_profit / price_without_vat * 100) if price_without_vat > 0 else 0.0
+    )
     
-    # Calculate profit margin without VAT
-    price_without_vat = price - vat_amount
-    profit_margin_without_vat = (profit_amount / price_without_vat * 100) if price_without_vat > 0 else 0.0
-    
-    return profit_amount, profit_margin, profit_margin_without_vat, platform_commission_amount
+    # Return in the expected format (profit_amount, profit_margin, profit_margin_without_vat, platform_commission_amount)
+    return (
+        float(result.net_profit),
+        float(result.profit_margin * 100),  # Convert to percentage
+        profit_margin_without_vat,
+        float(result.commission_amount)
+    )
 
 # Fee settings endpoints must be defined BEFORE /{listing_id} to avoid path matching conflicts
 class FeeSettingsRequest(BaseModel):
@@ -201,23 +242,38 @@ class FeeSettingsResponse(BaseModel):
     platform_commission: float
     vat: float
 
-# In-memory fee settings storage (can be moved to database later)
-_fee_settings = {
-    "shipping_cost": 0.0,
-    "order_fee": 0.0,
-    "storage_fee": 0.0,
-    "platform_commission": 0.0,
-    "vat": 0.0
-}
+def get_or_create_profit_config(db: Session, site: str = "emag_ro") -> ProfitConfig:
+    """Get or create profit config for a site"""
+    config = db.query(ProfitConfig).filter(ProfitConfig.site == site).first()
+    if not config:
+        config = ProfitConfig(
+            site=site,
+            default_shipping_cost=0.0,
+            default_order_fee=0.0,
+            default_storage_fee=0.0,
+            default_platform_commission=0.0,
+            default_vat_rate=0.0
+        )
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+    return config
 
 @router.get("/fee-settings", response_model=FeeSettingsResponse)
 async def get_fee_settings(
-    current_user: dict = Depends(require_auth)
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+    site: Optional[str] = Query("emag_ro", description="Site identifier")
 ):
-    """Get fee settings"""
-    
-    
-    return FeeSettingsResponse(**_fee_settings)
+    """Get fee settings from database"""
+    config = get_or_create_profit_config(db, site)
+    return FeeSettingsResponse(
+        shipping_cost=config.default_shipping_cost,
+        order_fee=config.default_order_fee,
+        storage_fee=config.default_storage_fee,
+        platform_commission=config.default_platform_commission,
+        vat=config.default_vat_rate
+    )
 
 @router.get("", response_model=ProfitListResponseWrapper)
 async def get_profit_list(
@@ -316,18 +372,69 @@ async def get_profit_list(
                     product_name_ro = filter_product.product_name
                     price = filter_product.price
         
-        # Calculate derived fields
+        # Calculate derived fields using ProfitEngine if we have all required data
         profit_margin_without_vat = None
         platform_commission_amount = None
+        vat_amount_calc = None
+        logistics_cost_calc = None
+        roi_calc = None
         
-        if calc and calc.platform_commission is not None and price:
-            platform_commission_amount = price * (calc.platform_commission / 100)
-            
-            if calc.vat is not None:
-                vat_amount = price * (calc.vat / 100)
-                price_without_vat = price - vat_amount
-                if price_without_vat > 0 and calc.profit_amount is not None:
-                    profit_margin_without_vat = (calc.profit_amount / price_without_vat * 100)
+        # Use ProfitEngine to calculate detailed metrics if we have all required data
+        if calc and price and calc.purchase_price is not None:
+            try:
+                config = get_or_create_profit_config(db)
+                
+                # Prepare inputs for ProfitEngine
+                weight_kg = Decimal(str(calc.weight)) if calc.weight is not None else Decimal("0")
+                length_cm = Decimal(str(calc.length)) if calc.length is not None else Decimal("0")
+                width_cm = Decimal(str(calc.width)) if calc.width is not None else Decimal("0")
+                height_cm = Decimal(str(calc.height)) if calc.height is not None else Decimal("0")
+                
+                shipping_cost_fixed = Decimal(str(calc.shipping_cost)) if calc.shipping_cost is not None else Decimal(str(config.default_shipping_cost))
+                order_fee_val = Decimal(str(calc.order_fee)) if calc.order_fee is not None else Decimal(str(config.default_order_fee))
+                storage_fee_val = Decimal(str(calc.storage_fee)) if calc.storage_fee is not None else Decimal(str(config.default_storage_fee))
+                commission_rate = Decimal(str(calc.platform_commission / 100)) if calc.platform_commission is not None else Decimal(str(config.default_platform_commission / 100))
+                vat_rate = Decimal(str(calc.vat / 100)) if calc.vat is not None else Decimal(str(config.default_vat_rate / 100))
+                
+                shipping_price_per_kg = None
+                if config.shipping_price_per_kg is not None:
+                    shipping_price_per_kg = Decimal(str(config.shipping_price_per_kg))
+                
+                # Calculate using ProfitEngine
+                result = ProfitEngine.calculate_profit(
+                    sale_price_gross=Decimal(str(price)),
+                    purchase_cost=Decimal(str(calc.purchase_price)),
+                    weight_kg=weight_kg,
+                    length_cm=length_cm,
+                    width_cm=width_cm,
+                    height_cm=height_cm,
+                    vat_rate=vat_rate,
+                    commission_rate=commission_rate,
+                    shipping_cost_fixed=shipping_cost_fixed,
+                    order_fee=order_fee_val,
+                    storage_fee=storage_fee_val,
+                    shipping_price_per_kg=shipping_price_per_kg,
+                )
+                
+                # Extract calculated values
+                platform_commission_amount = float(result.commission_amount)
+                vat_amount_calc = float(result.vat_amount)
+                logistics_cost_calc = float(result.logistics_cost)
+                roi_calc = float(result.roi * 100)  # Convert to percentage
+                
+                # Calculate profit margin without VAT
+                price_without_vat = Decimal(str(price)) - result.vat_amount
+                if price_without_vat > 0:
+                    profit_margin_without_vat = float(result.net_profit / price_without_vat * 100)
+            except Exception as e:
+                # Fallback to simple calculation if ProfitEngine fails
+                if calc.platform_commission is not None and price:
+                    platform_commission_amount = price * (calc.platform_commission / 100)
+                    if calc.vat is not None:
+                        vat_amount_calc = price * (calc.vat / 100)
+                        price_without_vat = price - vat_amount_calc
+                        if price_without_vat > 0 and calc.profit_amount is not None:
+                            profit_margin_without_vat = (calc.profit_amount / price_without_vat * 100)
         
         # 尝试自动获取佣金费率
         auto_commission_rate = None
@@ -357,13 +464,17 @@ async def get_profit_list(
                 height=None,
                 weight=None,
                 purchase_price=None,
+                sale_price=price,
                 profit_amount=None,
                 profit_margin=None,
                 profit_margin_without_vat=None,
+                roi=None,
                 category_name=None,
                 platform_commission=None,
                 auto_commission_rate=None,
                 platform_commission_amount=None,
+                vat_amount=None,
+                logistics_cost=None,
                 domestic_logistics=None,
                 shipping_cost=None,
                 status=listing.status.value if hasattr(listing.status, 'value') else str(listing.status),
@@ -383,13 +494,17 @@ async def get_profit_list(
                 height=calc.height,
                 weight=calc.weight,
                 purchase_price=calc.purchase_price,
+                sale_price=price,
                 profit_amount=calc.profit_amount,
                 profit_margin=calc.profit_margin,
                 profit_margin_without_vat=profit_margin_without_vat,
+                roi=roi_calc,
                 category_name=calc.category_name,
                 platform_commission=calc.platform_commission,
                 auto_commission_rate=auto_commission_rate,
                 platform_commission_amount=platform_commission_amount,
+                vat_amount=vat_amount_calc,
+                logistics_cost=logistics_cost_calc,
                 domestic_logistics=calc.shipping_cost,
                 shipping_cost=calc.shipping_cost,
                 status=listing.status.value if hasattr(listing.status, 'value') else str(listing.status),
@@ -407,24 +522,36 @@ async def get_profit_list(
 @router.put("/fee-settings", response_model=FeeSettingsResponse)
 async def update_fee_settings(
     request: FeeSettingsRequest,
-    current_user: dict = Depends(require_auth)
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+    site: Optional[str] = Query("emag_ro", description="Site identifier")
 ):
-    """Update fee settings"""
+    """Update fee settings in database"""
+    config = get_or_create_profit_config(db, site)
     
     # Update fee settings
     if request.shipping_cost is not None:
-        _fee_settings["shipping_cost"] = request.shipping_cost
+        config.default_shipping_cost = request.shipping_cost
     if request.order_fee is not None:
-        _fee_settings["order_fee"] = request.order_fee
+        config.default_order_fee = request.order_fee
     if request.storage_fee is not None:
-        _fee_settings["storage_fee"] = request.storage_fee
+        config.default_storage_fee = request.storage_fee
     if request.platform_commission is not None:
-        _fee_settings["platform_commission"] = request.platform_commission
+        config.default_platform_commission = request.platform_commission
     if request.vat is not None:
-        _fee_settings["vat"] = request.vat
+        config.default_vat_rate = request.vat
     
+    config.updated_by_user_id = current_user["id"]
+    db.commit()
+    db.refresh(config)
     
-    return FeeSettingsResponse(**_fee_settings)
+    return FeeSettingsResponse(
+        shipping_cost=config.default_shipping_cost,
+        order_fee=config.default_order_fee,
+        storage_fee=config.default_storage_fee,
+        platform_commission=config.default_platform_commission,
+        vat=config.default_vat_rate
+    )
 
 @router.get("/{listing_id}", response_model=ProfitCalculationResponse)
 async def get_profit_calculation(

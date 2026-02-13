@@ -10,6 +10,9 @@ export const keywordsApi = {
   // Get keywords list
   getKeywords: (params) => api.get('/keywords', { params }),
   
+  // Get brands list
+  getBrands: () => api.get('/keywords/brands'),
+  
   // Get keyword links (using /links endpoint with keyword_id param)
   getKeywordLinks: (keywordId, params = {}) => {
     const queryParams = { ...params }

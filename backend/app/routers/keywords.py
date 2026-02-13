@@ -1,7 +1,7 @@
 """Keywords and link library management API"""
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime
@@ -243,6 +243,43 @@ async def list_keywords(
     ).offset(skip).limit(limit).all()
     return keywords
 
+@router.get("/brands")
+async def get_brands(
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """Get distinct brands from keyword links"""
+    from sqlalchemy import distinct, func
+    brands = db.query(distinct(KeywordLink.brand)).filter(
+        KeywordLink.brand.isnot(None),
+        KeywordLink.brand != ""
+    ).order_by(KeywordLink.brand).all()
+    # Extract brand strings from tuples
+    brand_list = [brand[0] for brand in brands if brand[0]]
+    
+    # #region agent log
+    try:
+        import json as _json_debug, time as _time_debug
+        _entry = {
+            "id": f"brands_{int(_time_debug.time() * 1000)}",
+            "timestamp": int(_time_debug.time() * 1000),
+            "location": "keywords.py:get_brands",
+            "message": "brands query result",
+            "data": {
+                "count": len(brand_list),
+                "sample": brand_list[:5]
+            },
+            "runId": "pre-fix-1",
+            "hypothesisId": "H1,H2"
+        }
+        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+            _f.write(_json_debug.dumps(_entry, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+    # #endregion
+    
+    return {"brands": brand_list}
+
 @router.get("/links")
 async def get_keyword_links(
     keyword_id: Optional[int] = None,
@@ -262,7 +299,10 @@ async def get_keyword_links(
     tag: Optional[str] = None,
     offer_count_min: Optional[int] = None,
     offer_count_max: Optional[int] = None,
-    listed_at_period: Optional[str] = None
+    listed_at_period: Optional[str] = None,
+    # 前端 axios 可能会以 exclude_brands[]=x&exclude_brands[]=y 形式传参，这里同时兼容两种写法
+    exclude_brands: Optional[List[str]] = Query(None),
+    exclude_brands_brackets: Optional[List[str]] = Query(None, alias="exclude_brands[]")
 ):
     """Get keyword links with optional filters"""
     # #region agent log
@@ -298,7 +338,9 @@ async def get_keyword_links(
                 "rating_min": rating_min, "rating_max": rating_max,
                 "source": source, "tag": tag,
                 "offer_count_min": offer_count_min, "offer_count_max": offer_count_max,
-                "listed_at_period": listed_at_period
+                "listed_at_period": listed_at_period,
+                "exclude_brands": exclude_brands,
+                "exclude_brands_brackets": exclude_brands_brackets,
             }
         }, "H1,H2,H3,H4,H5")
     except Exception as _log_err:
@@ -307,6 +349,10 @@ async def get_keyword_links(
     
     try:
         query = db.query(KeywordLink)
+        # 兼容 axios 对数组参数使用 exclude_brands[] 的情况
+        if (not exclude_brands) and exclude_brands_brackets:
+            exclude_brands = exclude_brands_brackets
+
         if keyword_id:
             query = query.filter(KeywordLink.keyword_id == keyword_id)
         if price_min is not None:
@@ -347,23 +393,45 @@ async def get_keyword_links(
         # 上架日期筛选
         if listed_at_period:
             from datetime import timedelta
+            from sqlalchemy import or_, and_
             now = datetime.utcnow()
             
-            # 只筛选已成功获取上架日期的记录
-            query = query.filter(KeywordLink.listed_at_status == 'success')
-            
+            # 计算时间范围起始日期
+            start_date = None
             if listed_at_period == "6months":
                 # 使用 timedelta 近似 6 个月（约 180 天）
                 start_date = now - timedelta(days=180)
-                query = query.filter(KeywordLink.listed_at >= start_date)
             elif listed_at_period == "1year":
                 # 使用 timedelta 近似 1 年（365 天）
                 start_date = now - timedelta(days=365)
-                query = query.filter(KeywordLink.listed_at >= start_date)
             elif listed_at_period == "1.5years":
                 # 使用 timedelta 近似 1.5 年（约 547 天）
                 start_date = now - timedelta(days=547)
-                query = query.filter(KeywordLink.listed_at >= start_date)
+            
+            # 筛选逻辑：包含成功获取上架日期且在时间范围内的记录，以及去爬过但没有爬取到的记录（not_found/error）
+            if start_date:
+                query = query.filter(
+                    or_(
+                        # 成功获取上架日期且在时间范围内
+                        and_(
+                            KeywordLink.listed_at_status == 'success',
+                            KeywordLink.listed_at >= start_date
+                        ),
+                        # 去爬过但没有爬取到的记录（not_found 或 error，不包括 pending）
+                        KeywordLink.listed_at_status.in_(['not_found', 'error'])
+                    )
+                )
+        
+        # 品牌剔除筛选
+        if exclude_brands:
+            from sqlalchemy import or_
+            # 排除指定品牌，同时保留brand为NULL的记录（因为NULL品牌不应该被排除）
+            query = query.filter(
+                or_(
+                    KeywordLink.brand.is_(None),
+                    ~KeywordLink.brand.in_(exclude_brands)
+                )
+            )
         
         # #region agent log
         _time_before_count = _time_query.time()

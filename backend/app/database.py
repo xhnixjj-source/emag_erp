@@ -21,6 +21,7 @@ from app.models.product import FilterPool
 from app.models.monitor_pool import MonitorPool, MonitorHistory, MonitorStatus
 from app.models.listing import ListingPool, ListingDetails, ProfitCalculation, ListingStatus
 from app.models.operation_log import OperationLog
+from app.models.profit_config import ProfitConfig
 
 
 def get_db():

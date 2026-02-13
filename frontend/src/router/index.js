@@ -37,9 +37,15 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
-    path: '/profit',
-    name: 'Profit',
-    component: () => import('@/views/ProfitCalc.vue'),
+    path: '/product-library',
+    name: 'ProductLibrary',
+    component: () => import('@/views/ProductLibrary.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/profit-calculation',
+    name: 'ProfitCalculation',
+    component: () => import('@/views/ProfitCalculation.vue'),
     meta: { requiresAuth: true }
   },
   {

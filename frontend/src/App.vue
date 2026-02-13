@@ -32,7 +32,11 @@
             <el-icon><Monitor /></el-icon>
             <span>监控池</span>
           </el-menu-item>
-          <el-menu-item index="/profit">
+          <el-menu-item index="/product-library">
+            <el-icon><Document /></el-icon>
+            <span>产品库</span>
+          </el-menu-item>
+          <el-menu-item index="/profit-calculation">
             <el-icon><Money /></el-icon>
             <span>利润测算</span>
           </el-menu-item>
