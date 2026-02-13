@@ -15,8 +15,19 @@ class FilterPool(Base):
     thumbnail_image = Column(String, nullable=True)  # 产品缩略图URL
     brand = Column(String, nullable=True)  # 品牌
     shop_name = Column(String, nullable=True)  # 店铺名称
+    # 店铺介绍页完整URL（/xxx/v?ref=see_vendor_page）
+    shop_intro_url = Column(String, nullable=True)
+    # 店铺商品列表页完整URL（用于后续复用店铺排名/访问店铺页）
+    shop_url = Column(String, nullable=True)
+    # 产品主类目页完整URL（用于后续复用类目排名/访问类目页）
+    category_url = Column(String, nullable=True)
     price = Column(Float, nullable=True)
+    # 上架日期（如果能从 Istoric Preturi 获取到）
     listed_at = Column(DateTime(timezone=True), nullable=True)
+    # 上架日期获取状态：pending / success / not_found / error
+    listed_at_status = Column(String, nullable=True, default="pending")
+    # 上架日期获取错误类型：timeout / host_disconnected / http_error / parse_failed / unknown 等，仅在 status=error 时有意义
+    listed_at_error_type = Column(String, nullable=True)
     stock = Column(Integer, nullable=True)
     review_count = Column(Integer, nullable=True)
     latest_review_at = Column(DateTime(timezone=True), nullable=True)

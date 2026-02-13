@@ -47,6 +47,9 @@ export const keywordsApi = {
   getErrorLogs: (params = {}) => api.get('/keywords/error-logs', { params }),
   
   // Batch crawl links
-  batchCrawlLinks: (linkIds) => api.post('/keywords/links/batch-crawl', { link_ids: linkIds })
+  batchCrawlLinks: (linkIds) => api.post('/keywords/links/batch-crawl', { link_ids: linkIds }),
+  
+  // Batch get listed at (上架日期)
+  batchGetListedAt: (linkIds) => api.post('/keywords/links/batch-get-listed-at', { link_ids: linkIds })
 }
 

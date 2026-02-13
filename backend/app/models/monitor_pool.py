@@ -38,6 +38,7 @@ class MonitorHistory(Base):
     price = Column(Float, nullable=True)
     stock = Column(Integer, nullable=True)
     review_count = Column(Integer, nullable=True)
+    rating = Column(Float, nullable=True)  # 评分
     shop_rank = Column(Integer, nullable=True)
     category_rank = Column(Integer, nullable=True)
     ad_rank = Column(Integer, nullable=True)

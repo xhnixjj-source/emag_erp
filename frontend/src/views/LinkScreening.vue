@@ -10,8 +10,17 @@
               :disabled="selectedLinks.length === 0"
               @click="handleBatchCrawl"
               :loading="batchCrawling"
+              style="margin-right: 10px"
             >
               批量爬取 (已选择 {{ selectedLinks.length }} 个)
+            </el-button>
+            <el-button 
+              type="success" 
+              :disabled="selectedLinks.length === 0"
+              @click="handleBatchGetListedAt"
+              :loading="batchGettingListedAt"
+            >
+              批量获取上架日期 (已选择 {{ selectedLinks.length }} 个)
             </el-button>
           </div>
         </div>
@@ -74,6 +83,23 @@
           <el-input-number v-model="filters.rating_min" :min="0" :max="5" :precision="2" placeholder="最低评分" style="width: 120px" />
           <span style="margin: 0 5px">-</span>
           <el-input-number v-model="filters.rating_max" :min="0" :max="5" :precision="2" placeholder="最高评分" style="width: 120px" />
+        </el-form-item>
+        <el-form-item label="跟卖数">
+          <el-input-number v-model="filters.offer_count_min" :min="0" placeholder="最少跟卖" style="width: 120px" />
+          <span style="margin: 0 5px">-</span>
+          <el-input-number v-model="filters.offer_count_max" :min="0" placeholder="最多跟卖" style="width: 120px" />
+        </el-form-item>
+        <el-form-item label="上架日期">
+          <el-select
+            v-model="filters.listed_at_period"
+            placeholder="全部"
+            clearable
+            style="width: 150px"
+          >
+            <el-option label="近半年" value="6months" />
+            <el-option label="近1年" value="1year" />
+            <el-option label="近1.5年" value="1.5years" />
+          </el-select>
         </el-form-item>
         <el-form-item label="爬取时间">
           <el-date-picker
@@ -209,6 +235,31 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="listed_at" label="上架日期" width="180">
+          <template #default="{ row }">
+            <div v-if="row.listed_at" style="display: flex; flex-direction: column; gap: 4px;">
+              <span>{{ formatDateTime(row.listed_at) }}</span>
+              <el-tag 
+                v-if="row.listed_at_status" 
+                :type="getListedAtStatusType(row.listed_at_status)" 
+                size="small"
+                style="width: fit-content;"
+              >
+                {{ getListedAtStatusText(row.listed_at_status) }}
+              </el-tag>
+            </div>
+            <span v-else-if="row.listed_at_status === 'pending'">
+              <el-tag type="info" size="small">待获取</el-tag>
+            </span>
+            <span v-else-if="row.listed_at_status === 'error'">
+              <el-tag type="danger" size="small">获取失败</el-tag>
+            </span>
+            <span v-else-if="row.listed_at_status === 'not_found'">
+              <el-tag type="warning" size="small">未找到</el-tag>
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="crawled_at" label="抓取时间" width="170">
           <template #default="{ row }">
             {{ formatDateTime(row.crawled_at) }}
@@ -220,6 +271,7 @@
         v-model:current-page="page"
         v-model:page-size="pageSize"
         :total="total"
+        :page-sizes="[100, 200, 300]"
         @current-change="loadLinks"
         @size-change="loadLinks"
         layout="total, sizes, prev, pager, next, jumper"
@@ -236,13 +288,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 const loading = ref(false)
 const batchCrawling = ref(false)
+const batchGettingListedAt = ref(false)
 const links = ref([])
 const keywords = ref([])
 const selectedLinks = ref([])
 const selectAll = ref(false)
 const selectedKeywordId = ref(null)
 const page = ref(1)
-const pageSize = ref(20)
+const pageSize = ref(100)
 const total = ref(0)
 
 const filters = reactive({
@@ -254,7 +307,10 @@ const filters = reactive({
   rating_max: null,
   crawled_at_range: null,
   source: null,
-  tag: null
+  tag: null,
+  offer_count_min: null,
+  offer_count_max: null,
+  listed_at_period: null
 })
 
 const loadKeywords = async () => {
@@ -299,6 +355,19 @@ const loadLinks = async () => {
       params.crawled_at_end = filters.crawled_at_range[1]
     }
     
+    // 处理跟卖数筛选
+    if (filters.offer_count_min !== null && filters.offer_count_min !== undefined) {
+      params.offer_count_min = filters.offer_count_min
+    }
+    if (filters.offer_count_max !== null && filters.offer_count_max !== undefined) {
+      params.offer_count_max = filters.offer_count_max
+    }
+    
+    // 处理上架日期筛选
+    if (filters.listed_at_period) {
+      params.listed_at_period = filters.listed_at_period
+    }
+    
     // 调用 API（不传 keywordId，而是通过 params 传递）
     const response = await keywordsApi.getKeywordLinks(null, params)
     
@@ -335,6 +404,9 @@ const resetFilters = () => {
   filters.crawled_at_range = null
   filters.source = null
   filters.tag = null
+  filters.offer_count_min = null
+  filters.offer_count_max = null
+  filters.listed_at_period = null
   loadLinks()
 }
 
@@ -354,6 +426,26 @@ const formatDateTime = (dateTime) => {
     minute: '2-digit',
     second: '2-digit'
   })
+}
+
+const getListedAtStatusType = (status) => {
+  const statusMap = {
+    'success': 'success',
+    'pending': 'info',
+    'error': 'danger',
+    'not_found': 'warning'
+  }
+  return statusMap[status] || 'info'
+}
+
+const getListedAtStatusText = (status) => {
+  const statusMap = {
+    'success': '已获取',
+    'pending': '待获取',
+    'error': '获取失败',
+    'not_found': '未找到'
+  }
+  return statusMap[status] || status
 }
 
 const handleSelectAll = (checked) => {
@@ -404,6 +496,51 @@ const handleBatchCrawl = async () => {
     }
   } finally {
     batchCrawling.value = false
+  }
+}
+
+const handleBatchGetListedAt = async () => {
+  if (selectedLinks.value.length === 0) {
+    ElMessage.warning('请先选择要获取上架日期的链接')
+    return
+  }
+  
+  try {
+    await ElMessageBox.confirm(
+      `确定要批量获取 ${selectedLinks.value.length} 个链接的上架日期吗？`,
+      '确认批量获取上架日期',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    
+    batchGettingListedAt.value = true
+    const linkIds = selectedLinks.value.map(link => link.id)
+    
+    // 调用批量获取上架日期API
+    const response = await keywordsApi.batchGetListedAt(linkIds)
+    
+    const result = response.data || response
+    ElMessage.success(
+      result.message || 
+      `成功获取 ${result.success_count || 0} 个上架日期，失败 ${result.error_count || 0} 个，跳过 ${result.skipped_count || 0} 个`
+    )
+    
+    // 清空选择
+    selectedLinks.value = []
+    selectAll.value = false
+    
+    // 刷新列表以显示更新后的数据
+    await loadLinks()
+    
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error('批量获取上架日期失败: ' + (error.response?.data?.detail || error.message))
+    }
+  } finally {
+    batchGettingListedAt.value = false
   }
 }
 

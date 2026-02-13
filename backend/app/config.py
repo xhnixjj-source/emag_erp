@@ -89,7 +89,7 @@ class Config:
     MONITOR_THREADS: int = int(os.getenv("MONITOR_THREADS", "30"))
     
     # Retry configuration
-    MAX_RETRY_COUNT: int = int(os.getenv("MAX_RETRY_COUNT", "5"))
+    MAX_RETRY_COUNT: int = int(os.getenv("MAX_RETRY_COUNT", "3"))
     RETRY_BACKOFF_BASE: int = int(os.getenv("RETRY_BACKOFF_BASE", "2"))
     RETRY_BACKOFF_MAX: int = int(os.getenv("RETRY_BACKOFF_MAX", "60"))
     
@@ -111,6 +111,14 @@ class Config:
     SCHEDULER_TIMEZONE: str = os.getenv("SCHEDULER_TIMEZONE", "Asia/Shanghai")
     MONITOR_SCHEDULE_HOUR: int = int(os.getenv("MONITOR_SCHEDULE_HOUR", "2"))
     MONITOR_SCHEDULE_MINUTE: int = int(os.getenv("MONITOR_SCHEDULE_MINUTE", "0"))
+    # Listed_at backfill task configuration
+    LISTED_AT_BACKFILL_ENABLED: bool = os.getenv("LISTED_AT_BACKFILL_ENABLED", "true").lower() == "true"
+    LISTED_AT_BACKFILL_INTERVAL_MINUTES: int = int(os.getenv("LISTED_AT_BACKFILL_INTERVAL_MINUTES", "5"))
+    LISTED_AT_BATCH_SIZE: int = int(os.getenv("LISTED_AT_BATCH_SIZE", "50"))
+    LISTED_AT_SLEEP_SECONDS: float = float(os.getenv("LISTED_AT_SLEEP_SECONDS", "0.5"))
+    
+    # Ranking page timeout (shorter than main page, reduces wasted time on ranking subpages)
+    RANKING_PAGE_TIMEOUT: int = int(os.getenv("RANKING_PAGE_TIMEOUT", "20000"))
     
     # Playwright configuration
     PLAYWRIGHT_BROWSER_TYPE: str = os.getenv("PLAYWRIGHT_BROWSER_TYPE", "chromium")
@@ -143,9 +151,11 @@ class Config:
     # - 通过逆向分析 Chrome 插件源码获取 API 地址
     # - POST /getProductInfo 返回包含 Chart.js 图表数据的 HTML
     # - 从图表 data.labels[0] 提取最早追踪日期（即上架日期）
-    ISTORIC_PRETURI_ENABLED: bool = os.getenv("ISTORIC_PRETURI_ENABLED", "false").lower() == "true"
+    # 是否启用 Istoric Preturi 接口获取上架日期
+    ISTORIC_PRETURI_ENABLED: bool = os.getenv("ISTORIC_PRETURI_ENABLED", "true").lower() == "true"
     # 临时总开关：允许在不改代码的情况下完全屏蔽上架日期获取逻辑
-    DISABLE_LISTED_AT: bool = os.getenv("DISABLE_LISTED_AT", "true").lower() == "true"
+    # 默认改为 False，表示默认开启上架日期获取
+    DISABLE_LISTED_AT: bool = os.getenv("DISABLE_LISTED_AT", "false").lower() == "true"
     # API 基础地址（不含路径），如 https://api.istoric-preturi.info
     ISTORIC_PRETURI_ENDPOINT: str = os.getenv("ISTORIC_PRETURI_ENDPOINT", "https://api.istoric-preturi.info")
     # 调用超时时间（秒）

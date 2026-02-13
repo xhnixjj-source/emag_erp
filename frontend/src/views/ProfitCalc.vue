@@ -3,7 +3,7 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>利润测算</span>
+          <span>产品库</span>
           <div>
             <el-button @click="showFeeSettingsDialog = true">费用设置</el-button>
           </div>
@@ -26,7 +26,7 @@
         </el-form-item>
       </el-form>
 
-      <!-- 利润测算列表 -->
+      <!-- 产品库列表 -->
       <el-table
         :data="profitList"
         v-loading="loading"
@@ -56,95 +56,147 @@
         <el-table-column label="中文名" width="150">
           <template #default="{ row }">
             <el-input
-              v-if="editingRow === row.id && editingField === 'chinese_name'"
-              v-model="editingValue"
+              v-model="row.chinese_name"
               size="small"
-              @blur="handleSaveEdit(row, 'chinese_name')"
-              @keyup.enter="handleSaveEdit(row, 'chinese_name')"
+              placeholder="请输入中文名"
+              :disabled="!editableRows[row.id]"
             />
-            <span v-else @click="startEdit(row, 'chinese_name', row.chinese_name)" style="cursor: pointer;">
-              {{ row.chinese_name || '-' }}
-            </span>
           </template>
         </el-table-column>
         <el-table-column label="型号" width="150">
           <template #default="{ row }">
             <el-input
-              v-if="editingRow === row.id && editingField === 'model_number'"
-              v-model="editingValue"
+              v-model="row.model_number"
               size="small"
-              @blur="handleSaveEdit(row, 'model_number')"
-              @keyup.enter="handleSaveEdit(row, 'model_number')"
+              placeholder="请输入型号"
+              :disabled="!editableRows[row.id]"
             />
-            <span v-else @click="startEdit(row, 'model_number', row.model_number)" style="cursor: pointer;">
-              {{ row.model_number || '-' }}
-            </span>
           </template>
         </el-table-column>
-        <el-table-column prop="profit_amount" label="利润" width="120">
+        <el-table-column label="长(cm)" width="120">
           <template #default="{ row }">
-            <span :class="{ 'profit-positive': row.profit_amount > 0, 'profit-negative': row.profit_amount < 0 }">
-              {{ row.profit_amount !== null && row.profit_amount !== undefined ? `€${row.profit_amount.toFixed(2)}` : '-' }}
-            </span>
+            <el-input-number
+              v-model="row.length"
+              :precision="2"
+              :min="0"
+              size="small"
+              style="width: 100%"
+              placeholder="长"
+              :disabled="!editableRows[row.id]"
+            />
           </template>
         </el-table-column>
-        <el-table-column prop="profit_margin_without_vat" label="利润率（去除VAT）" width="150">
+        <el-table-column label="宽(cm)" width="120">
           <template #default="{ row }">
-            {{ row.profit_margin_without_vat !== null && row.profit_margin_without_vat !== undefined ? `${row.profit_margin_without_vat.toFixed(2)}%` : '-' }}
+            <el-input-number
+              v-model="row.width"
+              :precision="2"
+              :min="0"
+              size="small"
+              style="width: 100%"
+              placeholder="宽"
+              :disabled="!editableRows[row.id]"
+            />
           </template>
         </el-table-column>
-        <el-table-column prop="profit_margin" label="利润率（含VAT）" width="150">
+        <el-table-column label="高(cm)" width="120">
           <template #default="{ row }">
-            <span :class="{ 'profit-positive': row.profit_margin > 0, 'profit-negative': row.profit_margin < 0 }">
-              {{ row.profit_margin !== null && row.profit_margin !== undefined ? `${row.profit_margin.toFixed(2)}%` : '-' }}
-            </span>
+            <el-input-number
+              v-model="row.height"
+              :precision="2"
+              :min="0"
+              size="small"
+              style="width: 100%"
+              placeholder="高"
+              :disabled="!editableRows[row.id]"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="重量(kg)" width="120">
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.weight"
+              :precision="2"
+              :min="0"
+              size="small"
+              style="width: 100%"
+              placeholder="重量"
+              :disabled="!editableRows[row.id]"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="采购价(€)" width="120">
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.purchase_price"
+              :precision="2"
+              :min="0"
+              size="small"
+              style="width: 100%"
+              placeholder="采购价"
+              :disabled="!editableRows[row.id]"
+            />
           </template>
         </el-table-column>
         <el-table-column label="类目名称" width="150">
           <template #default="{ row }">
             <el-input
-              v-if="editingRow === row.id && editingField === 'category_name'"
-              v-model="editingValue"
+              v-model="row.category_name"
               size="small"
-              @blur="handleSaveEdit(row, 'category_name')"
-              @keyup.enter="handleSaveEdit(row, 'category_name')"
+              placeholder="请输入类目名称"
+              :disabled="!editableRows[row.id]"
             />
-            <span v-else @click="startEdit(row, 'category_name', row.category_name)" style="cursor: pointer;">
-              {{ row.category_name || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="佣金费率(%)" width="130">
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.platform_commission"
+              :precision="2"
+              :min="0"
+              :max="100"
+              size="small"
+              style="width: 100%"
+              placeholder="佣金费率"
+              :disabled="!!row.auto_commission_rate || !editableRows[row.id]"
+            />
+            <span v-if="row.auto_commission_rate" style="font-size: 10px; color: #999; display: block;">
+              自动: {{ row.auto_commission_rate }}%
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="platform_commission" label="佣金费率" width="120">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
-            {{ row.platform_commission !== null && row.platform_commission !== undefined ? `${row.platform_commission}%` : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="domestic_logistics" label="国内物流" width="120">
-          <template #default="{ row }">
-            {{ row.domestic_logistics !== null && row.domestic_logistics !== undefined ? `€${row.domestic_logistics.toFixed(2)}` : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="platform_commission_amount" label="平台佣金" width="120">
-          <template #default="{ row }">
-            {{ row.platform_commission_amount !== null && row.platform_commission_amount !== undefined ? `€${row.platform_commission_amount.toFixed(2)}` : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="shipping_cost" label="物流费" width="120">
-          <template #default="{ row }">
-            {{ row.shipping_cost !== null && row.shipping_cost !== undefined ? `€${row.shipping_cost.toFixed(2)}` : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
-          <template #default="{ row }">
-            <div style="display: flex; flex-wrap: wrap; gap: 5px;">
-              <el-button size="small" @click="handleViewDetail(row)">查看详情</el-button>
-              <el-button size="small" type="success" @click="handleList(row)" :disabled="row.status === 'listed'">
-                上架
+            <el-button 
+              v-if="!editableRows[row.id]"
+              size="small" 
+              type="primary" 
+              @click="handleEditProduct(row)"
+            >
+              修改
+            </el-button>
+            <template v-else>
+              <el-button 
+                size="small" 
+                type="success" 
+                @click="handleSaveProduct(row)"
+                :loading="savingRows[row.id]"
+              >
+                保存
               </el-button>
-              <el-button size="small" type="danger" @click="handleReject(row)" :disabled="row.status === 'rejected'">
-                放弃
+              <el-button 
+                size="small" 
+                @click="handleCancelEdit(row)"
+              >
+                取消
               </el-button>
-            </div>
+            </template>
+            <el-button size="small" type="success" @click="handleList(row)" :disabled="row.status === 'listed'">
+              上架
+            </el-button>
+            <el-button size="small" type="danger" @click="handleReject(row)" :disabled="row.status === 'rejected'">
+              放弃
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -159,48 +211,6 @@
         style="margin-top: 20px; flex-shrink: 0;"
       />
     </el-card>
-
-    <!-- 详情对话框 -->
-    <el-dialog v-model="showDetailDialog" title="利润测算详情" width="80%">
-      <div v-if="currentDetail">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="操作人">{{ currentDetail.operator_name }}</el-descriptions-item>
-          <el-descriptions-item label="产品名称(RO)">{{ currentDetail.product_name_ro }}</el-descriptions-item>
-          <el-descriptions-item label="中文名">{{ currentDetail.chinese_name || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="型号">{{ currentDetail.model_number || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="类目名称">{{ currentDetail.category_name || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="状态">
-            <el-tag :type="getStatusType(currentDetail.status)">{{ getStatusText(currentDetail.status) }}</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="利润">
-            <span :class="{ 'profit-positive': currentDetail.profit_amount > 0, 'profit-negative': currentDetail.profit_amount < 0 }">
-              €{{ currentDetail.profit_amount?.toFixed(2) || '0.00' }}
-            </span>
-          </el-descriptions-item>
-          <el-descriptions-item label="利润率（含VAT）">
-            <span :class="{ 'profit-positive': currentDetail.profit_margin > 0, 'profit-negative': currentDetail.profit_margin < 0 }">
-              {{ currentDetail.profit_margin?.toFixed(2) || '0.00' }}%
-            </span>
-          </el-descriptions-item>
-          <el-descriptions-item label="利润率（去除VAT）">
-            {{ currentDetail.profit_margin_without_vat?.toFixed(2) || '-' }}%
-          </el-descriptions-item>
-          <el-descriptions-item label="佣金费率">{{ currentDetail.platform_commission || '-' }}%</el-descriptions-item>
-          <el-descriptions-item label="平台佣金">€{{ currentDetail.platform_commission_amount?.toFixed(2) || '0.00' }}</el-descriptions-item>
-          <el-descriptions-item label="国内物流">€{{ currentDetail.domestic_logistics?.toFixed(2) || '0.00' }}</el-descriptions-item>
-          <el-descriptions-item label="物流费">€{{ currentDetail.shipping_cost?.toFixed(2) || '0.00' }}</el-descriptions-item>
-        </el-descriptions>
-        <div v-if="currentDetail.competitor_image" style="margin-top: 20px;">
-          <h4>竞品图片</h4>
-          <el-image
-            :src="currentDetail.competitor_image"
-            :preview-src-list="[currentDetail.competitor_image]"
-            fit="cover"
-            style="width: 200px; height: 200px;"
-          />
-        </div>
-      </div>
-    </el-dialog>
 
     <!-- 费用设置对话框 -->
     <el-dialog v-model="showFeeSettingsDialog" title="通用费用设置" width="600px">
@@ -279,12 +289,10 @@ const filters = reactive({
   status: null
 })
 
-const editingRow = ref(null)
-const editingField = ref(null)
-const editingValue = ref('')
-
-const showDetailDialog = ref(false)
-const currentDetail = ref(null)
+const editableRows = ref({}) // 用于跟踪每行的编辑状态
+const editingRows = ref({}) // 用于跟踪每行的修改状态
+const savingRows = ref({}) // 用于跟踪每行的保存状态
+const rowBackup = ref({}) // 用于保存编辑前的数据
 
 const showFeeSettingsDialog = ref(false)
 const feeSettings = reactive({
@@ -338,62 +346,93 @@ const loadProfitList = async () => {
       params.status = filters.status
     }
     // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:337','message':'Calling getProfitList API','data':{params},timestamp:Date.now(),sessionId:'debug-session',runId:'initial',hypothesisId:'E'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:350','message':'Loading profit list','data':{params},timestamp:Date.now(),runId:'initial',hypothesisId:'A'})}).catch(()=>{});
     // #endregion
     const response = await profitApi.getProfitList(params)
     // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:339','message':'Received profit list response','data':{items_count:response.items?.length || 0,total:response.total,first_item:response.items?.[0] || null},timestamp:Date.now(),sessionId:'debug-session',runId:'initial',hypothesisId:'E'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:352','message':'Profit list loaded','data':{items_count:response.items?.length || 0,total:response.total},timestamp:Date.now(),runId:'initial',hypothesisId:'A'})}).catch(()=>{});
     // #endregion
     profitList.value = response.items || []
     total.value = response.total || 0
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:342','message':'Updated profitList value','data':{profitList_length:profitList.value.length,first_item:profitList.value[0] || null},timestamp:Date.now(),sessionId:'debug-session',runId:'initial',hypothesisId:'E'})}).catch(()=>{});
-    // #endregion
+    // 重置编辑状态
+    editableRows.value = {}
   } catch (error) {
-    ElMessage.error('加载利润测算列表失败')
-    console.error(error)
     // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:345','message':'Error loading profit list','data':{error_message:error.message,error_stack:error.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'initial',hypothesisId:'E'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:356','message':'Error loading profit list','data':{error_message:error.message,error_stack:error.stack},timestamp:Date.now(),runId:'initial',hypothesisId:'A'})}).catch(()=>{});
     // #endregion
+    throw error
   } finally {
     loading.value = false
   }
 }
 
-const startEdit = (row, field, value) => {
-  editingRow.value = row.id
-  editingField.value = field
-  editingValue.value = value || ''
+// 修改产品 - 启用编辑模式
+const handleEditProduct = (row) => {
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:368','message':'Starting edit mode','data':{row_id:row.id,listing_pool_id:row.listing_pool_id},timestamp:Date.now(),runId:'initial',hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
+  // 保存当前数据作为备份
+  rowBackup.value[row.id] = {
+    chinese_name: row.chinese_name,
+    model_number: row.model_number,
+    length: row.length,
+    width: row.width,
+    height: row.height,
+    weight: row.weight,
+    purchase_price: row.purchase_price,
+    category_name: row.category_name,
+    platform_commission: row.platform_commission
+  }
+  editableRows.value[row.id] = true
 }
 
-const handleSaveEdit = async (row, field) => {
-  if (editingValue.value === (row[field] || '')) {
-    editingRow.value = null
-    editingField.value = null
-    editingValue.value = ''
-    return
+// 取消编辑
+const handleCancelEdit = (row) => {
+  // 恢复备份数据
+  if (rowBackup.value[row.id]) {
+    Object.assign(row, rowBackup.value[row.id])
+    delete rowBackup.value[row.id]
   }
+  editableRows.value[row.id] = false
+}
 
+// 保存产品 - 保存当前行的所有数据
+const handleSaveProduct = async (row) => {
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:395','message':'Starting save product','data':{row_id:row.id,listing_pool_id:row.listing_pool_id,update_data:{chinese_name:row.chinese_name,model_number:row.model_number,length:row.length,width:row.width,height:row.height,weight:row.weight,purchase_price:row.purchase_price,category_name:row.category_name,platform_commission:row.platform_commission}},timestamp:Date.now(),runId:'initial',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
+  savingRows.value[row.id] = true
   try {
     const updateData = {
-      [field]: editingValue.value || null
+      chinese_name: row.chinese_name || null,
+      model_number: row.model_number || null,
+      length: row.length !== null && row.length !== undefined ? row.length : null,
+      width: row.width !== null && row.width !== undefined ? row.width : null,
+      height: row.height !== null && row.height !== undefined ? row.height : null,
+      weight: row.weight !== null && row.weight !== undefined ? row.weight : null,
+      purchase_price: row.purchase_price !== null && row.purchase_price !== undefined ? row.purchase_price : null,
+      category_name: row.category_name || null,
+      platform_commission: row.platform_commission !== null && row.platform_commission !== undefined ? row.platform_commission : null
     }
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:408','message':'Calling updateCalculation API','data':{listing_pool_id:row.listing_pool_id,updateData},timestamp:Date.now(),runId:'initial',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     await profitApi.updateCalculation(row.listing_pool_id, updateData)
-    row[field] = editingValue.value
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:410','message':'Update calculation API success','data':{listing_pool_id:row.listing_pool_id},timestamp:Date.now(),runId:'initial',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     ElMessage.success('保存成功')
+    editableRows.value[row.id] = false
+    delete rowBackup.value[row.id]
+    await loadProfitList() // 重新加载列表以更新利润计算
   } catch (error) {
-    ElMessage.error('保存失败')
-    console.error(error)
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:416','message':'Error saving product','data':{error_message:error.message,error_response:error.response?.data,error_status:error.response?.status},timestamp:Date.now(),runId:'initial',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
+    throw error
   } finally {
-    editingRow.value = null
-    editingField.value = null
-    editingValue.value = ''
+    savingRows.value[row.id] = false
   }
-}
-
-const handleViewDetail = (row) => {
-  currentDetail.value = row
-  showDetailDialog.value = true
 }
 
 const handleList = async (row) => {
@@ -409,15 +448,14 @@ const handleList = async (row) => {
     await loadProfitList()
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('上架失败')
-      console.error(error)
+      throw error
     }
   }
 }
 
 const handleReject = async (row) => {
   try {
-    await ElMessageBox.confirm('确定要放弃该利润测算吗？', '确认放弃', {
+    await ElMessageBox.confirm('确定要放弃该产品吗？', '确认放弃', {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
       type: 'warning'
@@ -428,8 +466,7 @@ const handleReject = async (row) => {
     await loadProfitList()
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('操作失败')
-      console.error(error)
+      throw error
     }
   }
 }
@@ -450,7 +487,7 @@ const handleSaveFeeSettings = async () => {
     ElMessage.success('费用设置已保存')
     showFeeSettingsDialog.value = false
   } catch (error) {
-    ElMessage.error('保存失败')
+    throw error
   } finally {
     savingFeeSettings.value = false
   }
@@ -495,4 +532,3 @@ onMounted(async () => {
   background-color: #fef0f0;
 }
 </style>
-

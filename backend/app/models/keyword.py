@@ -55,6 +55,11 @@ class KeywordLink(Base):
     tag = Column(String, nullable=True)  # 标签（如 Super Hot）
     source = Column(String, default="keyword_search", nullable=False)  # 来源: keyword_search / chrome_extension
     
+    # 上架日期相关字段
+    listed_at = Column(DateTime(timezone=True), nullable=True)  # 上架日期（如果能从 Istoric Preturi 获取到）
+    listed_at_status = Column(String, nullable=True, default="pending")  # 上架日期获取状态：pending / success / not_found / error
+    listed_at_error_type = Column(String, nullable=True)  # 上架日期获取错误类型：timeout / host_disconnected / http_error / parse_failed / unknown 等，仅在 status=error 时有意义
+    
     # Relationships
     keyword = relationship("Keyword", back_populates="links")
 

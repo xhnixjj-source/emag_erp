@@ -9,6 +9,15 @@ from app.config import config
 
 logger = logging.getLogger(__name__)
 
+# 按错误类型设置最大重试次数（精确控制每种错误的重试上限）
+_ERROR_TYPE_MAX_RETRIES = {
+    ErrorType.TIMEOUT: 3,      # 超时最多重试3次
+    ErrorType.CONNECTION: 3,   # 连接错误最多重试3次
+    ErrorType.CAPTCHA: 2,      # 验证码最多重试2次（切换代理）
+    ErrorType.DISCONNECT: 2,   # 断开连接最多重试2次
+    ErrorType.OTHER: 1,        # 其他错误最多重试1次
+}
+
 
 class RetryManager:
     """Retry manager with exponential backoff and error classification"""
@@ -107,7 +116,7 @@ class RetryManager:
         error_type: Optional[ErrorType] = None
     ) -> bool:
         """
-        Determine if task should be retried
+        Determine if task should be retried (按错误类型分级控制)
         
         Args:
             error: Exception that occurred
@@ -117,17 +126,15 @@ class RetryManager:
         Returns:
             True if should retry, False otherwise
         """
-        if retry_count >= self.max_retries:
-            return False
-        
         if error_type is None:
             error_type = self.classify_error(error)
         
-        # 验证码错误：允许重试（切换代理后可能可以绕过验证码）
-        # 但限制重试次数，避免无限重试
-        if error_type == ErrorType.CAPTCHA:
-            # 验证码错误最多重试 max_retries 次（通过切换代理）
-            return True
+        # 使用错误类型专属的最大重试次数，取 min(类型上限, 全局上限)
+        type_max = _ERROR_TYPE_MAX_RETRIES.get(error_type, self.max_retries)
+        effective_max = min(type_max, self.max_retries)
+        
+        if retry_count >= effective_max:
+            return False
         
         return True
     
@@ -197,19 +204,36 @@ class RetryManager:
             should_close = False
         
         try:
-            error_log = ErrorLog(
-                task_id=task_id,
-                error_type=error_type,
-                error_message=str(error),
-                error_detail=error_detail or {},
-                occurred_at=datetime.utcnow()
-            )
+            # 检查是否已经存在未解决的错误记录（避免重复记录）
+            existing_error = db.query(ErrorLog).filter(
+                ErrorLog.task_id == task_id,
+                ErrorLog.resolved_at.is_(None)
+            ).first()
             
-            db.add(error_log)
-            db.commit()
-            db.refresh(error_log)
-            
-            return error_log.id
+            if existing_error:
+                # 更新现有错误记录
+                existing_error.error_type = error_type
+                existing_error.error_message = str(error)
+                existing_error.error_detail = error_detail or {}
+                existing_error.occurred_at = datetime.utcnow()
+                db.commit()
+                db.refresh(existing_error)
+                return existing_error.id
+            else:
+                # 创建新的错误记录
+                error_log = ErrorLog(
+                    task_id=task_id,
+                    error_type=error_type,
+                    error_message=str(error),
+                    error_detail=error_detail or {},
+                    occurred_at=datetime.utcnow()
+                )
+                
+                db.add(error_log)
+                db.commit()
+                db.refresh(error_log)
+                
+                return error_log.id
         except Exception as e:
             logger.error(f"Failed to log error: {e}")
             if should_close:

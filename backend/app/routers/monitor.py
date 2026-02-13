@@ -32,10 +32,12 @@ class MonitorPoolResponse(BaseModel):
     shop_name: Optional[str] = None
     is_fbe: Optional[bool] = None
     competitor_count: Optional[int] = None
+    listed_at: Optional[str] = None  # 上架日期
     # 最新监控数据
     price: Optional[float] = None
     stock: Optional[int] = None
     review_count: Optional[int] = None
+    rating: Optional[float] = None  # 评分
     shop_rank: Optional[int] = None
     category_rank: Optional[int] = None
     ad_rank: Optional[int] = None
@@ -50,6 +52,7 @@ class MonitorHistoryResponse(BaseModel):
     price: Optional[float]
     stock: Optional[int]
     review_count: Optional[int]
+    rating: Optional[float]  # 评分
     shop_rank: Optional[int]
     category_rank: Optional[int]
     ad_rank: Optional[int]
@@ -82,15 +85,31 @@ async def get_monitor_pool(
         skip = (page - 1) * page_size
         limit = page_size
     
+    # 只显示 ACTIVE 状态的监控项，并且未进入利润测算的
+    from app.models.listing import ListingPool
+    
+    # 获取所有已进入 listing pool 的 monitor_pool_id
+    listing_monitor_ids = db.query(ListingPool.monitor_pool_id).filter(
+        ListingPool.monitor_pool_id.isnot(None)
+    ).distinct().all()
+    listing_monitor_ids = [lid[0] for lid in listing_monitor_ids]
+    
     query = db.query(MonitorPool).filter(
-        MonitorPool.created_by_user_id == current_user["id"]
+        MonitorPool.created_by_user_id == current_user["id"],
+        MonitorPool.status == MonitorStatus.ACTIVE  # 只显示 ACTIVE 状态的
     )
     
+    # 排除已进入利润测算的监控项
+    if listing_monitor_ids:
+        query = query.filter(~MonitorPool.id.in_(listing_monitor_ids))
     
     if status:
         try:
             monitor_status = MonitorStatus(status)
-            query = query.filter(MonitorPool.status == monitor_status)
+            # 如果指定了 status，但我们已经过滤了 ACTIVE，这里可以忽略或验证
+            if monitor_status != MonitorStatus.ACTIVE:
+                # 如果请求的是非 ACTIVE 状态，返回空结果
+                query = query.filter(False)  # 强制返回空
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -156,10 +175,12 @@ async def get_monitor_pool(
             "shop_name": fp.shop_name if fp else None,
             "is_fbe": fp.is_fbe if fp else None,
             "competitor_count": fp.competitor_count if fp else None,
+            "listed_at": fp.listed_at.isoformat() if fp and fp.listed_at and isinstance(fp.listed_at, datetime) else (str(fp.listed_at) if fp and fp.listed_at else None),  # 上架日期
             # 最新监控数据（优先使用 history，否则使用 filter_pool）
             "price": latest_history.price if latest_history else (fp.price if fp else None),
             "stock": latest_history.stock if latest_history else (fp.stock if fp else None),
             "review_count": latest_history.review_count if latest_history else (fp.review_count if fp else None),
+            "rating": latest_history.rating if latest_history else None,  # 评分
             "shop_rank": latest_history.shop_rank if latest_history else (fp.shop_rank if fp else None),
             "category_rank": latest_history.category_rank if latest_history else (fp.category_rank if fp else None),
             "ad_rank": latest_history.ad_rank if latest_history else (fp.ad_rank if fp else None),
@@ -212,6 +233,7 @@ async def get_monitor_history(
             "price": h.price,
             "stock": h.stock,
             "review_count": h.review_count,
+            "rating": h.rating,  # 评分
             "shop_rank": h.shop_rank,
             "category_rank": h.category_rank,
             "ad_rank": h.ad_rank,
@@ -262,6 +284,7 @@ async def trigger_monitor(
         price=product_data.get('price'),
         stock=product_data.get('stock'),
         review_count=product_data.get('review_count'),
+        rating=product_data.get('reviews_score'),  # 评分字段
         shop_rank=product_data.get('shop_rank'),
         category_rank=product_data.get('category_rank'),
         ad_rank=product_data.get('ad_rank'),
@@ -399,11 +422,41 @@ async def update_schedule_config(
     current_user: dict = Depends(require_auth)
 ):
     """Update monitor schedule configuration"""
+    import logging
+    logger = logging.getLogger(__name__)
     
-    # 注意：这里只是返回配置，实际的调度器配置在config.py中
-    # 如果需要动态修改，需要重新配置scheduler
     from app.config import config
     
+    # 控制调度器任务的启用/禁用
+    try:
+        if request.enabled:
+            # 启用调度器任务
+            if scheduler.get_job("daily_monitor"):
+                scheduler.resume_job("daily_monitor")
+                logger.info("Monitor scheduler job resumed")
+            else:
+                # 如果任务不存在，重新添加
+                from app.services.scheduler import run_daily_monitor
+                scheduler.add_job(
+                    func=run_daily_monitor,
+                    trigger="cron",
+                    hour=config.MONITOR_SCHEDULE_HOUR,
+                    minute=config.MONITOR_SCHEDULE_MINUTE,
+                    timezone=config.SCHEDULER_TIMEZONE,
+                    id="daily_monitor",
+                    replace_existing=True,
+                    max_instances=1,
+                )
+                logger.info("Monitor scheduler job added")
+        else:
+            # 禁用调度器任务
+            if scheduler.get_job("daily_monitor"):
+                scheduler.pause_job("daily_monitor")
+                logger.info("Monitor scheduler job paused")
+    except Exception as e:
+        logger.error(f"Failed to update scheduler enabled state: {e}")
+    
+    # 更新时间配置
     if request.schedule_time:
         try:
             # 解析时间字符串 "HH:mm"
@@ -419,16 +472,26 @@ async def update_schedule_config(
                     minute=minute,
                     timezone=request.timezone or config.SCHEDULER_TIMEZONE
                 )
+                logger.info(f"Monitor schedule time updated to {hour:02d}:{minute:02d}")
         except Exception as e:
-            logger.warning(f"Failed to update schedule: {e}")
+            logger.warning(f"Failed to update schedule time: {e}")
+    
+    # 获取当前调度器状态
+    job = scheduler.get_job("daily_monitor")
+    is_enabled = job is not None and job.next_run_time is not None
     
     schedule_hour = config.MONITOR_SCHEDULE_HOUR
     schedule_minute = config.MONITOR_SCHEDULE_MINUTE
+    if request.schedule_time:
+        time_parts = request.schedule_time.split(':')
+        if len(time_parts) == 2:
+            schedule_hour = int(time_parts[0])
+            schedule_minute = int(time_parts[1])
     schedule_time = f"{schedule_hour:02d}:{schedule_minute:02d}"
     
     return ScheduleConfigResponse(
-        enabled=request.enabled,
-        schedule_time=request.schedule_time or schedule_time,
+        enabled=is_enabled if not request.enabled else request.enabled,  # 如果设置了enabled，使用设置的值；否则使用实际状态
+        schedule_time=schedule_time,
         timezone=request.timezone or config.SCHEDULER_TIMEZONE
     )
 

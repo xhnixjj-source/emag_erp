@@ -1337,6 +1337,7 @@ def crawl_monitor_product(
     Crawl product data for monitoring and save to history
     
     使用ProductDataCrawler.crawl_dynamic_data()仅爬取动态数据
+    从FilterPool获取shop_url和category_url，避免重复爬取
     
     Args:
         monitor_id: Monitor pool ID
@@ -1344,9 +1345,24 @@ def crawl_monitor_product(
         db: Database session
         
     Returns:
-        Crawled product data (仅包含动态字段) or None if failed
+        Crawled product data (仅包含6个核心监控字段) or None if failed
     """
     try:
+        # 从MonitorPool获取filter_pool_id，然后从FilterPool获取链接
+        from app.models.monitor_pool import MonitorPool
+        monitor = db.query(MonitorPool).filter(MonitorPool.id == monitor_id).first()
+        
+        shop_url = None
+        category_url = None
+        
+        if monitor and monitor.filter_pool_id:
+            filter_pool = db.query(FilterPool).filter(FilterPool.id == monitor.filter_pool_id).first()
+            if filter_pool:
+                shop_url = filter_pool.shop_url
+                category_url = filter_pool.category_url
+                if shop_url or category_url:
+                    logger.info(f"[监控爬取] 从FilterPool获取链接 - monitor_id: {monitor_id}, shop_url: {shop_url}, category_url: {category_url}")
+        
         # 使用新的Playwright爬取器，仅爬取动态数据
         crawler = ProductDataCrawler()
         
@@ -1354,7 +1370,9 @@ def crawl_monitor_product(
             return crawler.crawl_dynamic_data(
                 product_url=product_url,
                 task_id=None,  # Monitor tasks don't use crawl_tasks table
-                db=db
+                db=db,
+                shop_url=shop_url,  # 传入从FilterPool获取的shop_url
+                category_url=category_url  # 传入从FilterPool获取的category_url
             )
         
         # 使用retry_manager包装爬取调用，自动处理重试和错误记录
@@ -1364,7 +1382,16 @@ def crawl_monitor_product(
         )
         
         if product_data:
-            return product_data
+            # 只返回6个核心监控字段：价格、库存、评分、店铺排名、类目排名、广告排名
+            filtered_data = {
+                'price': product_data.get('price'),
+                'stock': product_data.get('stock_count') or product_data.get('stock'),
+                'reviews_score': product_data.get('reviews_score'),  # 评分
+                'shop_rank': product_data.get('store_rank') or product_data.get('shop_rank'),
+                'category_rank': product_data.get('category_rank'),
+                'ad_rank': product_data.get('ad_category_rank') or product_data.get('ad_rank'),
+            }
+            return filtered_data
         else:
             logger.warning(f"Failed to crawl product data for {product_url}")
             return None
@@ -1762,21 +1789,16 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
         # Crawl product details
         logger.info(f"[爬取进行中] 开始爬取产品详情 - 任务ID: {task_id}, 产品URL: {product_url}")
         
-        # 使用新的Playwright爬取器和retry_manager
+        # 使用新的Playwright爬取器
         crawler = ProductDataCrawler()
         
-        def _crawl():
-            return crawler.crawl_full_data(
-                product_url=product_url,
-                include_base_info=True,
-                task_id=task_id,
-                db=db
-            )
-        
-        # 使用retry_manager包装爬取调用，自动处理重试和错误记录
-        product_data = retry_manager.execute_with_retry(
-            _crawl,
-            task_id=task_id
+        # 直接调用爬取，不进行重试（失败的任务将在批量重试阶段处理）
+        # 注意：错误记录在task_manager中统一处理，这里只抛出异常
+        product_data = crawler.crawl_full_data(
+            product_url=product_url,
+            include_base_info=True,
+            task_id=task_id,
+            db=db
         )
         
         if not product_data:
@@ -1791,13 +1813,28 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
         _basic_keys = ['title', 'product_name', 'price', 'stock_count', 'stock', 'review_count', 'brand', 'shop_name', 'latest_review_date', 'latest_review_at', 'listed_at']
         _ranking_data = {k: product_data.get(k) for k in _ranking_keys}
         _basic_data = {k: str(product_data.get(k))[:50] if product_data.get(k) is not None else None for k in _basic_keys}
+        _is_emag = product_data.get('is_emag_official', False)
         with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-            _f.write(_json_save.dumps({"timestamp": int(time.time()*1000), "location": "crawler.py:product_data_received", "message": "爬取结果数据", "data": {"task_id": task_id, "url": product_url, "all_keys": list(product_data.keys()), "ranking": _ranking_data, "basic": _basic_data, "total_fields": len(product_data)}, "hypothesisId": "G1,G2", "runId": "field-debug"}, default=str) + "\n")
+            _f.write(_json_save.dumps({"timestamp": int(time.time()*1000), "location": "crawler.py:product_data_received", "message": "爬取结果数据", "data": {"task_id": task_id, "url": product_url, "all_keys": list(product_data.keys()), "ranking": _ranking_data, "basic": _basic_data, "total_fields": len(product_data), "is_emag_official": _is_emag}, "hypothesisId": "G1,G2,H_emag_detect", "runId": "emag-official-fix"}, default=str) + "\n")
         # #endregion
         
         # Update task progress
         task.progress = 80
         db.commit()
+        
+        # 从 keyword_link 获取上架日期（如果存在）
+        keyword_link_listed_at = None
+        if task.keyword_id:
+            keyword_link = db.query(KeywordLink).filter(
+                KeywordLink.product_url == product_url,
+                KeywordLink.keyword_id == task.keyword_id
+            ).first()
+            if keyword_link and keyword_link.listed_at:
+                keyword_link_listed_at = keyword_link.listed_at
+                logger.info(f"[数据保存] 从 keyword_link 获取上架日期 - 任务ID: {task_id}, 产品URL: {product_url}, 上架日期: {keyword_link_listed_at}")
+        
+        # 优先使用 keyword_link 中的上架日期，否则使用爬取结果中的
+        final_listed_at = keyword_link_listed_at or product_data.get('listed_at')
         
         # Check if product already exists in filter_pool
         logger.info(f"[数据保存] 开始保存产品数据到数据库 - 任务ID: {task_id}, 产品URL: {product_url}")
@@ -1811,16 +1848,19 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
             _matched = [k for k in product_data.keys() if k != 'product_url' and hasattr(existing, k)]
             _dropped = [k for k in product_data.keys() if k != 'product_url' and not hasattr(existing, k)]
             with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json_save.dumps({"timestamp": int(time.time()*1000), "location": "crawler.py:update_existing", "message": "更新现有记录-字段匹配", "data": {"task_id": task_id, "url": product_url, "is_new": False, "matched_fields": _matched, "dropped_fields": _dropped, "existing_shop_rank": existing.shop_rank, "existing_category_rank": existing.category_rank, "existing_ad_rank": existing.ad_rank, "existing_stock": existing.stock, "existing_product_name": str(existing.product_name)[:50] if existing.product_name else None}, "hypothesisId": "G1,G4", "runId": "field-debug"}, default=str) + "\n")
+                _f.write(_json_save.dumps({"timestamp": int(time.time()*1000), "location": "crawler.py:update_existing", "message": "更新现有记录-字段匹配", "data": {"task_id": task_id, "url": product_url, "is_new": False, "matched_fields": _matched, "dropped_fields": _dropped, "existing_shop_rank": existing.shop_rank, "existing_category_rank": existing.category_rank, "existing_ad_rank": existing.ad_rank, "existing_stock": existing.stock, "existing_product_name": str(existing.product_name)[:50] if existing.product_name else None, "listed_at_from_keyword_link": keyword_link_listed_at is not None, "final_listed_at": str(final_listed_at) if final_listed_at else None}, "hypothesisId": "G1,G4", "runId": "field-debug"}, default=str) + "\n")
             # #endregion
             
             for key, value in product_data.items():
                 if key != 'product_url' and hasattr(existing, key):
                     setattr(existing, key, value)
+            # 更新上架日期（优先使用 keyword_link 中的）
+            if final_listed_at:
+                existing.listed_at = final_listed_at
             existing.crawled_at = datetime.utcnow()
             db.commit()
             
-            logger.info(f"[数据保存] 更新现有产品数据 - 任务ID: {task_id}, 产品URL: {product_url}")
+            logger.info(f"[数据保存] 更新现有产品数据 - 任务ID: {task_id}, 产品URL: {product_url}, 上架日期: {final_listed_at}")
         else:
             # Create new record
             # 注意：ProductDataCrawler返回的字段名可能与FilterPool不同，需要映射
@@ -1834,8 +1874,12 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
                 thumbnail_image=product_data.get('thumbnail_image'),
                 brand=product_data.get('brand'),
                 shop_name=product_data.get('shop_name'),
+                # 在筛选池中同时保存店铺介绍页、完整店铺URL和类目URL，便于后续复用
+                shop_intro_url=product_data.get('shop_intro_url'),
+                shop_url=product_data.get('shop_url'),
+                category_url=product_data.get('category_url'),
                 price=product_data.get('price'),
-                listed_at=product_data.get('listed_at'),
+                listed_at=final_listed_at,  # 优先使用 keyword_link 中的上架日期
                 stock=product_data.get('stock_count') or product_data.get('stock'),  # 新格式使用stock_count
                 review_count=product_data.get('review_count'),
                 latest_review_at=product_data.get('latest_review_date') or product_data.get('latest_review_at'),  # 新格式使用latest_review_date
@@ -1898,15 +1942,8 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
             pass
         # #endregion
 
-        # 更新任务状态为失败
-        if task:
-            task.status = TaskStatus.FAILED
-            task.error_message = f"Error: {str(e)}"
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
-        
+        # 不在这里更新任务状态，让task_manager统一处理
+        # task_manager会记录错误并标记任务为FAILED
         raise
 
 # ============================================================================

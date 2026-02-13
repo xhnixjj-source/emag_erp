@@ -7,7 +7,7 @@ from datetime import datetime
 from app.database import get_db
 from app.middleware.auth_middleware import require_auth
 from app.models.listing import ListingPool, ListingStatus, ListingDetails
-from app.models.monitor_pool import MonitorPool
+from app.models.monitor_pool import MonitorPool, MonitorStatus
 from app.services.permission import require_product_edit_permission, check_product_lock
 from app.services.operation_log_service import create_operation_log
 
@@ -147,6 +147,7 @@ async def add_to_listing(
             )
         
         created_count = 0
+        stopped_monitor_count = 0
         for monitor in monitors:
             # Check if already in listing pool
             existing = db.query(ListingPool).filter(
@@ -162,13 +163,23 @@ async def add_to_listing(
                 )
                 db.add(listing)
                 created_count += 1
+            
+            # 进入利润测算的产品自动停止监控
+            if monitor.status == MonitorStatus.ACTIVE:
+                monitor.status = MonitorStatus.INACTIVE
+                stopped_monitor_count += 1
         
         db.commit()
         
         
+        message = f"Successfully added {created_count} products to listing pool"
+        if stopped_monitor_count > 0:
+            message += f", stopped {stopped_monitor_count} monitor(s)"
+        
         result = {
-            "message": f"Successfully added {created_count} products to listing pool",
-            "created_count": created_count
+            "message": message,
+            "created_count": created_count,
+            "stopped_monitor_count": stopped_monitor_count
         }
         
         

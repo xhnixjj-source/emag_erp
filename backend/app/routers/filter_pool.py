@@ -163,6 +163,26 @@ async def get_filter_pool(
         
         return response
     except Exception as e:
+        # 调试：记录筛选池列表加载失败的详细原因到 debug.log
+        # #region agent log
+        import json as _json_fp, time as _time_fp
+        try:
+            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(_json_fp.dumps({
+                    "timestamp": int(_time_fp.time() * 1000),
+                    "location": "filter_pool.py:get_filter_pool:exception",
+                    "message": "筛选池加载产品列表失败",
+                    "data": {
+                        "error": str(e)[:300],
+                        "error_type": type(e).__name__
+                    },
+                    "hypothesisId": "H_filter_pool_load_fail",
+                    "runId": "filter-pool-debug"
+                }, ensure_ascii=False) + "\n")
+        except Exception:
+            # 日志失败不影响主流程
+            pass
+        # #endregion
         raise
 
 @router.post("/filter", response_model=FilterPoolListResponse)

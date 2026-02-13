@@ -5,6 +5,11 @@
 - chinese_name: 中文名
 - model_number: 型号
 - category_name: 类目名称
+- length: 长 (cm)
+- width: 宽 (cm)
+- height: 高 (cm)
+- weight: 重量 (kg)
+- purchase_price: 采购价 (€)
 
 注意：REJECTED 状态在 SQLite 中通过 Enum 存储，无需额外迁移，只需在代码中添加即可
 """
@@ -95,6 +100,71 @@ def migrate_database():
                 db.rollback()
         else:
             print("category_name 字段已存在，跳过")
+
+        # 添加 length 字段
+        if 'length' not in column_names:
+            print("添加 length 字段...")
+            try:
+                db.execute(text("ALTER TABLE profit_calculation ADD COLUMN length FLOAT"))
+                db.commit()
+                print("[OK] length 字段已创建")
+            except Exception as e:
+                print(f"迁移失败: {e}")
+                db.rollback()
+        else:
+            print("length 字段已存在，跳过")
+
+        # 添加 width 字段
+        if 'width' not in column_names:
+            print("添加 width 字段...")
+            try:
+                db.execute(text("ALTER TABLE profit_calculation ADD COLUMN width FLOAT"))
+                db.commit()
+                print("[OK] width 字段已创建")
+            except Exception as e:
+                print(f"迁移失败: {e}")
+                db.rollback()
+        else:
+            print("width 字段已存在，跳过")
+
+        # 添加 height 字段
+        if 'height' not in column_names:
+            print("添加 height 字段...")
+            try:
+                db.execute(text("ALTER TABLE profit_calculation ADD COLUMN height FLOAT"))
+                db.commit()
+                print("[OK] height 字段已创建")
+            except Exception as e:
+                print(f"迁移失败: {e}")
+                db.rollback()
+        else:
+            print("height 字段已存在，跳过")
+
+        # 添加 weight 字段
+        if 'weight' not in column_names:
+            print("添加 weight 字段...")
+            try:
+                db.execute(text("ALTER TABLE profit_calculation ADD COLUMN weight FLOAT"))
+                db.commit()
+                print("[OK] weight 字段已创建")
+            except Exception as e:
+                print(f"迁移失败: {e}")
+                db.rollback()
+        else:
+            print("weight 字段已存在，跳过")
+
+        # 添加 purchase_price 字段
+        if 'purchase_price' not in column_names:
+            print("添加 purchase_price 字段...")
+            try:
+                db.execute(text("ALTER TABLE profit_calculation ADD COLUMN purchase_price FLOAT"))
+                db.commit()
+                print("[OK] purchase_price 字段已创建")
+            except Exception as e:
+                print(f"迁移失败: {e}")
+                db.rollback()
+        else:
+            print("purchase_price 字段已存在，跳过")
     
     print("\n迁移完成！")
 

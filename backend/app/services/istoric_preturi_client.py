@@ -383,15 +383,68 @@ def get_listed_at(product_url: str) -> Optional[datetime]:
 
         # #region agent log
         t0 = _time.time()
-        _dbg("client.py:request_start", "API请求开始", {"url": product_url, "api_url": api_url, "client_id": _get_client_identifier()[:8]}, "H1,H2")
+        # 检查是否使用代理
+        try:
+            from app.utils.proxy import proxy_manager
+            from app.config import config as app_config
+            proxy_used = None
+            proxy_enabled = False
+            proxy_count = 0
+            config_proxy_enabled = False
+            
+            if proxy_manager:
+                proxy_enabled = proxy_manager.enabled
+                proxy_count = len(proxy_manager.proxies) if hasattr(proxy_manager, 'proxies') else 0
+                if proxy_manager.enabled:
+                    proxy_used = proxy_manager.get_proxy()
+            
+            config_proxy_enabled = app_config.PROXY_ENABLED
+            
+            _dbg("client.py:proxy_check", "代理检查", {
+                "config_proxy_enabled": config_proxy_enabled,
+                "proxy_manager_exists": proxy_manager is not None,
+                "proxy_manager_enabled": proxy_enabled,
+                "proxy_count": proxy_count,
+                "proxy_used": bool(proxy_used),
+                "proxy_api_url": app_config.PROXY_API_URL if hasattr(app_config, 'PROXY_API_URL') else None
+            }, "H2,H3")
+        except Exception as proxy_check_err:
+            proxy_manager = None
+            proxy_used = None
+            proxy_enabled = False
+            _dbg("client.py:proxy_check_error", "代理检查异常", {
+                "error": str(proxy_check_err)[:200],
+                "error_type": type(proxy_check_err).__name__
+            }, "H2,H3")
+        
+        _dbg("client.py:request_start", "API请求开始", {
+            "url": product_url, 
+            "api_url": api_url, 
+            "client_id": _get_client_identifier()[:8],
+            "proxy_enabled": proxy_enabled,
+            "proxy_used": bool(proxy_used),
+            "user_agent": headers.get("User-Agent", "")[:50]
+        }, "H2,H3")
         # #endregion
 
         try:
+            # 如果启用了代理，使用代理发送请求
+            proxies = None
+            if proxy_used:
+                proxies = proxy_used
+                # #region agent log
+                _dbg("client.py:using_proxy", "使用代理发送请求", {
+                    "url": product_url,
+                    "proxy": str(proxy_used)[:100] if proxy_used else None
+                }, "H2")
+                # #endregion
+            
             resp = requests.post(
                 api_url,
                 json=payload,
                 headers=headers,
                 timeout=config.ISTORIC_PRETURI_TIMEOUT,
+                proxies=proxies,
             )
             # #region agent log
             elapsed = _time.time() - t0

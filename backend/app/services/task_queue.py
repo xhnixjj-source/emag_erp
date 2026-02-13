@@ -1,12 +1,15 @@
 """Task queue system with priority, state persistence, and resume capability"""
 import queue
 import threading
+import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
 from sqlalchemy.orm import Session
 from app.database import CrawlTask, TaskStatus, TaskPriority, TaskType, SessionLocal, get_db
 from app.config import config
+
+logger = logging.getLogger(__name__)
 
 
 class TaskQueue:
@@ -271,4 +274,68 @@ class TaskQueue:
         """Remove task from in-memory map (after completion)"""
         with self._lock:
             self._task_map.pop(task_id, None)
+    
+    def retry_failed_tasks(self, db: Optional[Session] = None, max_tasks: int = 100) -> int:
+        """
+        批量重试失败的任务
+        
+        Args:
+            db: 数据库会话（可选）
+            max_tasks: 最多重试的任务数量
+            
+        Returns:
+            重试的任务数量
+        """
+        if db is None:
+            from app.database import SessionLocal
+            db = SessionLocal()
+            should_close = True
+        else:
+            should_close = False
+        
+        try:
+            # 获取所有FAILED状态的任务
+            failed_tasks = db.query(CrawlTask).filter(
+                CrawlTask.status == TaskStatus.FAILED
+            ).order_by(
+                CrawlTask.updated_at.asc()  # 按更新时间升序，先重试较早失败的任务
+            ).limit(max_tasks).all()
+            
+            retried_count = 0
+            for task in failed_tasks:
+                # 重置任务状态和重试计数
+                task.status = TaskStatus.PENDING
+                task.retry_count = 0
+                task.error_message = None
+                task.progress = 0
+                task.updated_at = datetime.utcnow()
+                
+                # 重新加入队列
+                priority_value = self._get_priority_value(task.priority)
+                queue_item = (priority_value, datetime.utcnow().timestamp(), task.id)
+                
+                try:
+                    with self._lock:
+                        self._task_map[task.id] = task
+                        self._queue.put_nowait(queue_item)
+                    retried_count += 1
+                except queue.Full:
+                    # 队列已满，回滚任务状态
+                    task.status = TaskStatus.FAILED
+                    logger.warning(f"Retry queue full, cannot retry task {task.id}")
+                    break
+            
+            if retried_count > 0:
+                db.commit()
+                logger.info(f"Retried {retried_count} failed tasks")
+            
+            return retried_count
+        except Exception as e:
+            logger.error(f"Error retrying failed tasks: {e}", exc_info=True)
+            if should_close:
+                db.rollback()
+            return 0
+        finally:
+            if should_close:
+                db.close()
 

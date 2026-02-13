@@ -59,7 +59,7 @@ class ProfitCalculationResponse(BaseModel):
     chinese_name: Optional[str] = None
     model_number: Optional[str] = None
     category_name: Optional[str] = None
-    calculated_at: str
+    calculated_at: Optional[str] = None
 
     model_config = {"protected_namespaces": (), "from_attributes": True}
 
@@ -76,11 +76,17 @@ class ProfitListResponse(BaseModel):
     product_name_ro: Optional[str] = None
     chinese_name: Optional[str] = None
     model_number: Optional[str] = None
+    length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    weight: Optional[float] = None
+    purchase_price: Optional[float] = None
     profit_amount: Optional[float] = None
     profit_margin: Optional[float] = None
     profit_margin_without_vat: Optional[float] = None
     category_name: Optional[str] = None
     platform_commission: Optional[float] = None
+    auto_commission_rate: Optional[float] = None  # 自动获取的佣金费率
     platform_commission_amount: Optional[float] = None
     domestic_logistics: Optional[float] = None
     shipping_cost: Optional[float] = None
@@ -97,6 +103,26 @@ class ProfitListResponseWrapper(BaseModel):
     total: int
     page: int
     page_size: int
+
+def get_commission_rate_by_category(category_name: Optional[str]) -> Optional[float]:
+    """
+    根据类目名称获取佣金费率
+    如果没有找到或没有类目名称，返回None
+    """
+    if not category_name:
+        return None
+    
+    # 这里可以根据实际的类目和佣金费率映射关系来获取
+    # 目前先返回None，后续可以根据实际需求添加映射表
+    # 例如：
+    # category_commission_map = {
+    #     "Electronics": 5.0,
+    #     "Clothing": 8.0,
+    #     ...
+    # }
+    # return category_commission_map.get(category_name)
+    
+    return None
 
 def calculate_profit(
     listing_pool_id: int,
@@ -303,7 +329,17 @@ async def get_profit_list(
                 if price_without_vat > 0 and calc.profit_amount is not None:
                     profit_margin_without_vat = (calc.profit_amount / price_without_vat * 100)
         
+        # 尝试自动获取佣金费率
+        auto_commission_rate = None
+        category_name_for_commission = None
         
+        # 优先从calc中获取类目名称
+        if calc and calc.category_name:
+            category_name_for_commission = calc.category_name
+        
+        # 根据类目名称获取佣金费率
+        if category_name_for_commission:
+            auto_commission_rate = get_commission_rate_by_category(category_name_for_commission)
         
         # Handle case where calc is None - use listing.id as temporary id
         if not calc:
@@ -316,11 +352,17 @@ async def get_profit_list(
                 product_name_ro=product_name_ro,
                 chinese_name=None,
                 model_number=None,
+                length=None,
+                width=None,
+                height=None,
+                weight=None,
+                purchase_price=None,
                 profit_amount=None,
                 profit_margin=None,
                 profit_margin_without_vat=None,
                 category_name=None,
                 platform_commission=None,
+                auto_commission_rate=None,
                 platform_commission_amount=None,
                 domestic_logistics=None,
                 shipping_cost=None,
@@ -336,11 +378,17 @@ async def get_profit_list(
                 product_name_ro=product_name_ro,
                 chinese_name=calc.chinese_name,
                 model_number=calc.model_number,
+                length=calc.length,
+                width=calc.width,
+                height=calc.height,
+                weight=calc.weight,
+                purchase_price=calc.purchase_price,
                 profit_amount=calc.profit_amount,
                 profit_margin=calc.profit_margin,
                 profit_margin_without_vat=profit_margin_without_vat,
                 category_name=calc.category_name,
                 platform_commission=calc.platform_commission,
+                auto_commission_rate=auto_commission_rate,
                 platform_commission_amount=platform_commission_amount,
                 domestic_logistics=calc.shipping_cost,
                 shipping_cost=calc.shipping_cost,
@@ -492,20 +540,48 @@ async def create_profit_calculation(
     db.refresh(calc)
     
     # Log operation
-    create_operation_log(
-        db=db,
-        user_id=current_user["id"],
-        operation_type="profit_calc",
-        target_type="listing_pool",
-        target_id=listing_id,
-        operation_detail={
-            "purchase_price": calc.purchase_price,
-            "profit_amount": calc.profit_amount,
-            "profit_margin": calc.profit_margin
-        }
-    )
+    try:
+        create_operation_log(
+            db=db,
+            user_id=current_user["id"],
+            operation_type="profit_calc",
+            target_type="listing_pool",
+            target_id=listing_id,
+            operation_detail={
+                "purchase_price": calc.purchase_price,
+                "profit_amount": calc.profit_amount,
+                "profit_margin": calc.profit_margin
+            }
+        )
+    except Exception as e:
+        # 如果操作日志记录失败，不应该影响主流程
+        import traceback
+        import json
+        log_file = r"d:\emag_erp\.cursor\debug.log"
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"location":"profit.py:543","message":"Error creating operation log","data":{"error_message":str(e),"error_type":type(e).__name__},"timestamp":int(__import__('time').time()*1000),"runId":"initial","hypothesisId":"E"}) + "\n")
     
-    return calc
+    # 构造响应对象，确保 calculated_at 是字符串
+    return ProfitCalculationResponse(
+        id=calc.id,
+        listing_pool_id=calc.listing_pool_id,
+        purchase_price=calc.purchase_price,
+        length=calc.length,
+        width=calc.width,
+        height=calc.height,
+        weight=calc.weight,
+        shipping_cost=calc.shipping_cost,
+        order_fee=calc.order_fee,
+        storage_fee=calc.storage_fee,
+        platform_commission=calc.platform_commission,
+        vat=calc.vat,
+        profit_margin=calc.profit_margin,
+        profit_amount=calc.profit_amount,
+        chinese_name=calc.chinese_name,
+        model_number=calc.model_number,
+        category_name=calc.category_name,
+        calculated_at=calc.calculated_at.isoformat() if calc.calculated_at else None
+    )
 
 @router.put("/{listing_id}", response_model=ProfitCalculationResponse)
 async def update_profit_calculation(
@@ -515,10 +591,29 @@ async def update_profit_calculation(
     db: Session = Depends(get_db)
 ):
     """Update profit calculation"""
-    # Check permission
-    require_product_edit_permission(db, listing_id, current_user["id"])
-    
-    return await create_profit_calculation(listing_id, request, current_user, db)
+    import traceback
+    import json
+    log_file = r"d:\emag_erp\.cursor\debug.log"
+    try:
+        # #region agent log
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"location":"profit.py:567","message":"Starting update_profit_calculation","data":{"listing_id":listing_id,"request_data":request.dict()},"timestamp":int(__import__('time').time()*1000),"runId":"initial","hypothesisId":"D"}) + "\n")
+        # #endregion
+        # Check permission
+        require_product_edit_permission(db, listing_id, current_user["id"])
+        
+        result = await create_profit_calculation(listing_id, request, current_user, db)
+        # #region agent log
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"location":"profit.py:572","message":"create_profit_calculation success","data":{"listing_id":listing_id,"calc_id":result.id if result else None},"timestamp":int(__import__('time').time()*1000),"runId":"initial","hypothesisId":"D"}) + "\n")
+        # #endregion
+        return result
+    except Exception as e:
+        # #region agent log
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"location":"profit.py:576","message":"Error in update_profit_calculation","data":{"error_message":str(e),"error_type":type(e).__name__,"traceback":traceback.format_exc()},"timestamp":int(__import__('time').time()*1000),"runId":"initial","hypothesisId":"D"}) + "\n")
+        # #endregion
+        raise
 
 @router.put("/{listing_id}/reject", response_model=dict)
 async def reject_profit_calculation(

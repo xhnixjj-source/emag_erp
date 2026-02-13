@@ -171,36 +171,22 @@ class TaskManager:
                 elapsed = time.time() - start_time
                 logger.error(f"[任务执行] 任务执行失败 - 任务ID: {task_id}, 任务类型: {task.task_type}, 错误: {str(e)}, 耗时: {elapsed:.2f}秒", exc_info=True)
                 
-                # Check if should retry
-                if task.retry_count < task.max_retries:
-                    # Increment retry count
-                    self.task_queue.increment_retry_count(task_id, db=db)
-                    
-                    # Re-add to queue with higher priority (thread-safe)
-                    priority_value = self.task_queue._get_priority_value(TaskPriority.HIGH)
-                    queue_item = (priority_value, datetime.utcnow().timestamp(), task_id)
-                    try:
-                        with self.task_queue._lock:
-                            # Refresh task in map
-                            refreshed_task = self.task_queue.get_task_info(task_id, db)
-                            if refreshed_task:
-                                self.task_queue._task_map[task_id] = refreshed_task
-                            self.task_queue._queue.put_nowait(queue_item)
-                        self.task_queue.update_task_status(task_id, TaskStatus.RETRY, db=db)
-                        logger.info(f"Task {task_id} queued for retry ({task.retry_count + 1}/{task.max_retries})")
-                    except queue.Full:
-                        self.task_queue.update_task_status(
-                            task_id, TaskStatus.FAILED,
-                            error_message=f"Retry queue full: {str(e)}",
-                            db=db
-                        )
-                else:
-                    # Max retries exceeded
-                    self.task_queue.update_task_status(
-                        task_id, TaskStatus.FAILED,
-                        error_message=f"Max retries exceeded: {str(e)}",
-                        db=db
-                    )
+                # 记录错误到ErrorLog（如果还没有记录）
+                try:
+                    from app.services.retry_manager import retry_manager
+                    from app.models.crawl_task import ErrorType
+                    error_type = retry_manager.classify_error(e)
+                    retry_manager.log_error(task_id, e, error_type, db=db)
+                except Exception as log_err:
+                    logger.error(f"记录任务错误失败: {log_err}")
+                
+                # 不立即重试，标记为FAILED，等待批量重试
+                self.task_queue.update_task_status(
+                    task_id, TaskStatus.FAILED,
+                    error_message=f"Task failed: {str(e)[:500]}",
+                    db=db
+                )
+                logger.info(f"Task {task_id} marked as FAILED, will be retried in batch retry phase")
         
         except Exception as e:
             logger.error(f"Error executing task {task_id}: {e}", exc_info=True)
@@ -219,6 +205,10 @@ class TaskManager:
         print(f"[工作线程] 工作线程启动 - {worker_name}")
         logger.info(f"Worker thread {worker_name} started")
         
+        # 批量重试检查间隔（秒），避免频繁检查
+        last_batch_retry_check = 0
+        batch_retry_check_interval = 10  # 每10秒检查一次
+        
         while not self._stop_event.is_set():
             try:
                 # Check active task count
@@ -234,6 +224,32 @@ class TaskManager:
                 task_id = self.task_queue.get_task_non_blocking()
                 
                 if task_id is None:
+                    # No tasks available, check if we should retry failed tasks
+                    # Only retry if queue is empty AND no active tasks
+                    current_time = time.time()
+                    with self._active_tasks_lock:
+                        active_count = len(self._active_tasks)
+                    
+                    # 定期检查批量重试（避免频繁检查）
+                    if (active_count == 0 and 
+                        self.task_queue.empty() and 
+                        current_time - last_batch_retry_check >= batch_retry_check_interval):
+                        # All tasks completed, try to retry failed tasks
+                        try:
+                            db = SessionLocal()
+                            retried_count = self.task_queue.retry_failed_tasks(db=db, max_tasks=50)
+                            if retried_count > 0:
+                                logger.info(f"[批量重试] 重试了 {retried_count} 个失败的任务")
+                                print(f"[批量重试] 重试了 {retried_count} 个失败的任务")
+                                last_batch_retry_check = current_time
+                                # Continue immediately to process retried tasks
+                                continue
+                            db.close()
+                            last_batch_retry_check = current_time
+                        except Exception as retry_err:
+                            logger.error(f"批量重试失败任务时出错: {retry_err}", exc_info=True)
+                            last_batch_retry_check = current_time
+                    
                     # No tasks available, wait a bit
                     time.sleep(0.5)
                     continue

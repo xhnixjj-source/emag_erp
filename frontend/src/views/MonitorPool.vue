@@ -65,6 +65,11 @@
           </template>
         </el-table-column>
         <el-table-column prop="review_count" label="评论数" width="100" />
+        <el-table-column prop="rating" label="评分" width="100">
+          <template #default="{ row }">
+            {{ row.rating !== null && row.rating !== undefined ? row.rating.toFixed(2) : '-' }}
+          </template>
+        </el-table-column>
         <el-table-column label="FBE" width="80">
           <template #default="{ row }">
             <el-tag :type="row.is_fbe ? 'success' : 'info'" size="small">
@@ -81,6 +86,11 @@
             <el-tag :type="row.status === 'active' ? 'success' : 'info'">
               {{ row.status === 'active' ? '监控中' : '已停止' }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="listed_at" label="上架日期" width="180">
+          <template #default="{ row }">
+            {{ formatDate(row.listed_at) }}
           </template>
         </el-table-column>
         <el-table-column prop="last_monitored_at" label="最后监控时间" width="180" />
@@ -104,14 +114,12 @@
 
     <!-- 历史数据对话框 -->
     <el-dialog v-model="showHistoryDialog" title="监控历史" width="80%">
-      <v-chart 
-        v-if="showHistoryDialog && historyData.length > 0"
-        :option="chartOption" 
-        class="history-chart" 
-        style="height: 400px; margin-bottom: 20px;"
-      />
       <el-table :data="historyData" v-loading="historyLoading" style="width: 100%">
-        <el-table-column prop="monitored_at" label="监控时间" width="180" />
+        <el-table-column prop="monitored_at" label="监控时间" width="180">
+          <template #default="{ row }">
+            {{ formatDateTime(row.monitored_at) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="price" label="价格" width="100">
           <template #default="{ row }">
             {{ row.price ? `€${row.price}` : '-' }}
@@ -125,8 +133,14 @@
           </template>
         </el-table-column>
         <el-table-column prop="review_count" label="评论数" width="100" />
+        <el-table-column prop="rating" label="评分" width="100">
+          <template #default="{ row }">
+            {{ row.rating !== null && row.rating !== undefined ? row.rating.toFixed(2) : '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="shop_rank" label="店铺排名" width="120" />
         <el-table-column prop="category_rank" label="类目排名" width="120" />
+        <el-table-column prop="ad_rank" label="广告排名" width="120" />
       </el-table>
     </el-dialog>
 
@@ -159,25 +173,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { monitorPoolApi } from '@/api/monitorPool'
 import { listingApi } from '@/api/listing'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart } from 'echarts/charts'
-import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
-import VChart from 'vue-echarts'
-
-use([
-  CanvasRenderer,
-  LineChart,
-  TitleComponent,
-  TooltipComponent,
-  LegendComponent,
-  GridComponent
-])
 
 const loading = ref(false)
 const triggering = ref(false)
@@ -242,76 +242,42 @@ const loadHistory = async () => {
   }
 }
 
-const chartOption = computed(() => {
-  if (historyData.value.length === 0) {
-    return {
-      title: { text: '暂无数据' }
+// 格式化日期时间：yyyy-mm-dd hh:mm:ss
+const formatDateTime = (value) => {
+  if (!value) return '-'
+  try {
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) {
+      return value
     }
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const hours = String(d.getHours()).padStart(2, '0')
+    const minutes = String(d.getMinutes()).padStart(2, '0')
+    const seconds = String(d.getSeconds()).padStart(2, '0')
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+  } catch (e) {
+    return value
   }
-  
-  const dates = historyData.value.map(h => {
-    const date = new Date(h.monitored_at)
-    return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:${date.getMinutes()}`
-  })
-  const prices = historyData.value.map(h => h.price || 0)
-  const stocks = historyData.value.map(h => h.stock || 0)
-  const reviewCounts = historyData.value.map(h => h.review_count || 0)
-  
-  return {
-    title: {
-      text: '监控历史趋势'
-    },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: {
-        type: 'cross'
-      }
-    },
-    legend: {
-      data: ['价格', '库存', '评论数']
-    },
-    xAxis: {
-      type: 'category',
-      data: dates,
-      boundaryGap: false
-    },
-    yAxis: [
-      {
-        type: 'value',
-        name: '价格 (€)',
-        position: 'left'
-      },
-      {
-        type: 'value',
-        name: '库存/评论数',
-        position: 'right'
-      }
-    ],
-    series: [
-      {
-        name: '价格',
-        type: 'line',
-        data: prices,
-        yAxisIndex: 0,
-        smooth: true
-      },
-      {
-        name: '库存',
-        type: 'line',
-        data: stocks,
-        yAxisIndex: 1,
-        smooth: true
-      },
-      {
-        name: '评论数',
-        type: 'line',
-        data: reviewCounts,
-        yAxisIndex: 1,
-        smooth: true
-      }
-    ]
+}
+
+// 格式化日期：yyyy-mm-dd
+const formatDate = (value) => {
+  if (!value) return '-'
+  try {
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) {
+      return value
+    }
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  } catch (e) {
+    return value
   }
-})
+}
 
 const handleRemove = async (id) => {
   try {
@@ -448,8 +414,5 @@ onMounted(() => {
   align-items: center;
 }
 
-.history-chart {
-  width: 100%;
-}
 </style>
 

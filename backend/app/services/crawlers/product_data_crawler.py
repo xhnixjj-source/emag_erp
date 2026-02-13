@@ -79,7 +79,9 @@ class ProductDataCrawler:
         self,
         product_url: str,
         task_id: Optional[int] = None,
-        db: Optional[Session] = None
+        db: Optional[Session] = None,
+        shop_url: Optional[str] = None,
+        category_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         仅爬取动态数据（监控池使用，不包含重试逻辑）
@@ -88,6 +90,8 @@ class ProductDataCrawler:
             product_url: 产品URL
             task_id: 任务ID（用于更新进度）
             db: 数据库会话（用于更新任务状态）
+            shop_url: 店铺链接（可选，从FilterPool获取，避免重复爬取）
+            category_url: 类目链接（可选，从FilterPool获取，避免重复爬取）
             
         Returns:
             包含动态产品数据的字典（仅包含动态字段）
@@ -95,14 +99,16 @@ class ProductDataCrawler:
         Raises:
             Exception: 爬取失败时抛出异常，由retry_manager处理重试
         """
-        logger.info(f"[爬取开始] 产品动态数据爬取 - URL: {product_url}, 任务ID: {task_id}")
+        logger.info(f"[爬取开始] 产品动态数据爬取 - URL: {product_url}, 任务ID: {task_id}, shop_url: {shop_url}, category_url: {category_url}")
         return self._crawl_with_context(
             product_url=product_url,
             extract_base_info=False,
             extract_dynamic_data=True,
             extract_rankings=True,  # 监控时也提取排名
             task_id=task_id,
-            db=db
+            db=db,
+            shop_url=shop_url,
+            category_url=category_url
         )
     
     def _crawl_with_context(
@@ -112,7 +118,9 @@ class ProductDataCrawler:
         extract_dynamic_data: bool,
         extract_rankings: bool,
         task_id: Optional[int] = None,
-        db: Optional[Session] = None
+        db: Optional[Session] = None,
+        shop_url: Optional[str] = None,
+        category_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         内部爬取方法，统一处理上下文获取和释放
@@ -203,15 +211,69 @@ class ProductDataCrawler:
             load_start = time.time()
             stage = "page_goto"
             
-            
+            # #region agent log
+            import json as _json_page_goto
+            try:
+                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                    _f.write(_json_page_goto.dumps({
+                        "timestamp": int(time.time() * 1000),
+                        "location": "product_data_crawler.py:before_page_goto",
+                        "message": "准备加载产品页面",
+                        "data": {
+                            "url": product_url,
+                            "timeout_ms": config.PLAYWRIGHT_NAVIGATION_TIMEOUT,
+                            "wait_until": "domcontentloaded"
+                        },
+                        "hypothesisId": "H1",
+                        "runId": "timeout-debug"
+                    }, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
             
             try:
                 # 使用更宽松的 load_state，避免网络长连接导致 networkidle 超时
                 page.goto(product_url, wait_until='domcontentloaded', timeout=config.PLAYWRIGHT_NAVIGATION_TIMEOUT)
                 
+                # #region agent log
+                try:
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_json_page_goto.dumps({
+                            "timestamp": int(time.time() * 1000),
+                            "location": "product_data_crawler.py:after_page_goto",
+                            "message": "产品页面加载完成",
+                            "data": {
+                                "url": product_url,
+                                "elapsed_ms": int((time.time() - load_start) * 1000)
+                            },
+                            "hypothesisId": "H1",
+                            "runId": "timeout-debug"
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 
             except Exception as e:
-                
+                # #region agent log
+                try:
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_json_page_goto.dumps({
+                            "timestamp": int(time.time() * 1000),
+                            "location": "product_data_crawler.py:page_goto_error",
+                            "message": "产品页面加载失败",
+                            "data": {
+                                "url": product_url,
+                                "error_type": type(e).__name__,
+                                "error_message": str(e)[:300],
+                                "elapsed_ms": int((time.time() - load_start) * 1000),
+                                "timeout_ms": config.PLAYWRIGHT_NAVIGATION_TIMEOUT
+                            },
+                            "hypothesisId": "H1",
+                            "runId": "timeout-debug"
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 raise
             load_elapsed = time.time() - load_start
             logger.debug(f"[页面加载] 产品页面加载完成 - URL: {product_url}, 加载耗时: {load_elapsed:.2f}秒")
@@ -240,6 +302,23 @@ class ProductDataCrawler:
             # 提取基础信息
             if extract_base_info:
                 extract_start = time.time()
+                # #region agent log
+                import json as _json_base_start
+                try:
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_json_base_start.dumps({
+                            "timestamp": int(time.time() * 1000),
+                            "location": "product_data_crawler.py:before_base_info_extract",
+                            "message": "准备提取基础信息",
+                            "data": {
+                                "url": product_url
+                            },
+                            "hypothesisId": "H2",
+                            "runId": "timeout-debug"
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 try:
                     base_info = self.base_info_extractor.extract(page, product_url)
                     extract_elapsed = time.time() - extract_start
@@ -303,6 +382,23 @@ class ProductDataCrawler:
             if extract_dynamic_data:
                 stage = "extract_dynamic"
                 extract_start = time.time()
+                # #region agent log
+                import json as _json_dyn_start
+                try:
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_json_dyn_start.dumps({
+                            "timestamp": int(time.time() * 1000),
+                            "location": "product_data_crawler.py:before_dynamic_info_extract",
+                            "message": "准备提取动态信息",
+                            "data": {
+                                "url": product_url
+                            },
+                            "hypothesisId": "H3",
+                            "runId": "timeout-debug"
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 try:
                     dynamic_data = self.dynamic_data_extractor.extract_basic_fields(page)
                     extract_elapsed = time.time() - extract_start
@@ -370,7 +466,11 @@ class ProductDataCrawler:
                         rankings = self.dynamic_data_extractor.extract_rankings(
                             page=page,
                             product_url=product_url,
-                            context=context
+                            context=context,
+                            shop_url=shop_url,  # 传入从FilterPool获取的shop_url
+                            category_url=category_url,  # 传入从FilterPool获取的category_url
+                            task_id=task_id,  # 传递任务ID用于错误记录
+                            db=db  # 传递数据库会话用于错误记录
                         )
                         ranking_elapsed = time.time() - ranking_start
                         result.update(rankings)
@@ -379,8 +479,35 @@ class ProductDataCrawler:
                     except Exception as ranking_error:
                         ranking_elapsed = time.time() - ranking_start
                         
-                        logger.warning(f"[数据提取] 排名信息提取失败 - URL: {product_url}, 错误: {str(ranking_error)}, 耗时: {ranking_elapsed:.2f}秒")
-                        # 排名提取失败不影响其他数据，继续执行
+                        # 所有从 extract_rankings 抛出的异常都应该是关键错误，因为排名提取失败意味着数据不完整
+                        # 直接抛出异常，不进行任何检查，确保任务失败并触发重试
+                        error_msg = str(ranking_error)
+                        error_type = type(ranking_error).__name__
+                        
+                        logger.error(f"[数据提取] 排名信息提取失败（关键错误）- URL: {product_url}, 错误: {error_msg}, 错误类型: {error_type}, 耗时: {ranking_elapsed:.2f}秒")
+                        # #region agent log
+                        import json as _json_rank_fail
+                        try:
+                            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                                _f.write(_json_rank_fail.dumps({
+                                    "timestamp": int(time.time() * 1000),
+                                    "location": "product_data_crawler.py:extract_rankings_failed_critical",
+                                    "message": "排名提取失败（关键错误），抛出异常",
+                                    "data": {
+                                        "url": product_url,
+                                        "error": error_msg[:300],
+                                        "error_type": error_type,
+                                        "elapsed": round(ranking_elapsed, 2),
+                                        "ranking_keys_before_error": list(result.get('category_rank', result.get('store_rank', result.get('ad_category_rank', 'N/A'))))
+                                    },
+                                    "hypothesisId": "H_rank_fail_critical",
+                                    "runId": "ranking-fix"
+                                }, ensure_ascii=False) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
+                        # 重新抛出异常，确保任务失败并触发重试
+                        raise
 
             # 通过 Istoric Preturi 接口补充上架日期（优先于页面 DOM 解析）
             # 注意：根据 config.DISABLE_LISTED_AT 可临时整体屏蔽该步骤，后续可通过修改配置重新开启

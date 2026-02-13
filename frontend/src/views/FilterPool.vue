@@ -144,13 +144,20 @@
         <el-table-column prop="shop_rank" label="店铺排名" width="120" />
         <el-table-column prop="category_rank" label="类目排名" width="120" />
         <el-table-column prop="ad_rank" label="广告排名" width="120" />
-        <el-table-column prop="crawled_at" label="爬取时间" width="180" />
+        <el-table-column prop="crawled_at" label="爬取时间" width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span style="white-space: nowrap;">
+              {{ formatDateTime(row.crawled_at) }}
+            </span>
+          </template>
+        </el-table-column>
       </el-table>
 
       <el-pagination
         v-model:current-page="page"
         v-model:page-size="pageSize"
         :total="total"
+        :page-sizes="[100, 200, 300]"
         @current-change="loadProducts"
         @size-change="loadProducts"
         layout="total, sizes, prev, pager, next, jumper"
@@ -171,7 +178,7 @@ const products = ref([])
 const selectedProducts = ref([])
 const selectAll = ref(false)
 const page = ref(1)
-const pageSize = ref(20)
+const pageSize = ref(100)
 const total = ref(0)
 
 const filters = reactive({
@@ -193,6 +200,26 @@ const formatDate = (value) => {
       return value
     }
     return d.toLocaleDateString()
+  } catch (e) {
+    return value
+  }
+}
+
+// 格式化日期时间为 yyyy-mm-dd hh:mm:ss
+const formatDateTime = (value) => {
+  if (!value) return '-'
+  try {
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) {
+      return value
+    }
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const hours = String(d.getHours()).padStart(2, '0')
+    const minutes = String(d.getMinutes()).padStart(2, '0')
+    const seconds = String(d.getSeconds()).padStart(2, '0')
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
   } catch (e) {
     return value
   }
