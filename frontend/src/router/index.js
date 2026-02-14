@@ -59,6 +59,12 @@ const routes = [
     name: 'LinkScreening',
     component: () => import('@/views/LinkScreening.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/failed-tasks',
+    name: 'FailedTasks',
+    component: () => import('@/views/FailedTasks.vue'),
+    meta: { requiresAuth: true }
   }
 ]
 

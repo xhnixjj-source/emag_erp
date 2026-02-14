@@ -94,8 +94,8 @@ class Config:
     RETRY_BACKOFF_MAX: int = int(os.getenv("RETRY_BACKOFF_MAX", "60"))
     
     # Task queue configuration
-    TASK_QUEUE_SIZE: int = int(os.getenv("TASK_QUEUE_SIZE", "1000"))
-    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "100"))
+    TASK_QUEUE_SIZE: int = int(os.getenv("TASK_QUEUE_SIZE", "500"))
+    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "50"))
     TASK_MANAGER_ENABLED: bool = os.getenv("TASK_MANAGER_ENABLED", "true").lower() == "true"
     MAX_CONCURRENT_TASKS: int = int(os.getenv("MAX_CONCURRENT_TASKS", "10"))
     TASK_POLLING_INTERVAL: int = int(os.getenv("TASK_POLLING_INTERVAL", "2"))

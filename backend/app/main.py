@@ -60,7 +60,7 @@ def setup_logging():
 # 初始化日志系统
 setup_logging()
 
-from app.routers import auth, keywords, filter_pool, monitor, listing, profit, operation_log
+from app.routers import auth, keywords, filter_pool, monitor, listing, profit, operation_log, failed_tasks
 from app.middleware.operation_log_middleware import OperationLogMiddleware
 from app.services.scheduler import start_scheduler
 
@@ -142,6 +142,7 @@ app.include_router(monitor.router)
 app.include_router(listing.router)
 app.include_router(profit.router)
 app.include_router(operation_log.router)
+app.include_router(failed_tasks.router)
 
 @app.on_event("startup")
 async def startup_event():

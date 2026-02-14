@@ -44,6 +44,10 @@
             <el-icon><Document /></el-icon>
             <span>上架管理</span>
           </el-menu-item>
+          <el-menu-item index="/failed-tasks">
+            <el-icon><WarningFilled /></el-icon>
+            <span>失败任务</span>
+          </el-menu-item>
           <el-menu-item index="/operation-log" v-if="isAdmin">
             <el-icon><Document /></el-icon>
             <span>操作日志</span>
@@ -62,7 +66,7 @@
 import { computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useStore } from 'vuex'
-import { Search, Filter, Monitor, Document, Money, Connection } from '@element-plus/icons-vue'
+import { Search, Filter, Monitor, Document, Money, Connection, WarningFilled } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const route = useRoute()
