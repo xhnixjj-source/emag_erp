@@ -10,8 +10,10 @@ from app.config import config
 logger = logging.getLogger(__name__)
 
 # 按错误类型设置最大重试次数（精确控制每种错误的重试上限）
+# 超时重试设为 1：超时说明页面/网络持续慢，再试同样超时，浪费窗口 30s+
+# 连接错误保留 3：瞬时网络错误恢复概率高（内部已重试 3 次后才到这里）
 _ERROR_TYPE_MAX_RETRIES = {
-    ErrorType.TIMEOUT: 3,      # 超时最多重试3次
+    ErrorType.TIMEOUT: 1,      # 超时最多重试1次（节省浏览器窗口资源）
     ErrorType.CONNECTION: 3,   # 连接错误最多重试3次
     ErrorType.CAPTCHA: 2,      # 验证码最多重试2次（切换代理）
     ErrorType.DISCONNECT: 2,   # 断开连接最多重试2次

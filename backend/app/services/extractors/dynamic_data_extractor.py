@@ -1284,7 +1284,8 @@ class DynamicDataExtractor:
                 # 其他异常记录但不中断
                 logger.debug(f"验证码检测异常（可忽略）: {e}")
 
-            # 等待页面完全加载
+            # 等待页面完全加载（软失败：超时后仍尝试提取已加载的内容）
+            _element_wait_ok = True
             try:
                 # 等待card_grid容器出现（goto 后 JS 渲染仍需时间）
                 card_grid = category_page.locator('#card_grid')
@@ -1299,9 +1300,17 @@ class DynamicDataExtractor:
                 # 额外等待500ms确保动态内容加载完成
                 category_page.wait_for_timeout(500)
             except PlaywrightTimeoutError as e:
-                # 页面加载超时：抛出异常，确保任务失败并触发重试
-                logger.error(f"等待类目页加载超时: {page_url}, 错误: {e}")
-                raise
+                # 元素等待超时：不抛出异常，尝试用已加载的 DOM 继续提取
+                _element_wait_ok = False
+                logger.warning(f"类目页元素等待超时（软失败，继续提取）: {page_url}, 错误: {e}")
+                # #region agent log
+                try:
+                    import json as _j_sw, time as _t_sw
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_j_sw.dumps({"timestamp": int(_t_sw.time()*1000), "location": "dynamic_data_extractor.py:element_wait_soft_fail", "message": "元素等待超时，软失败继续提取", "data": {"page_url": page_url, "error": str(e)[:200]}, "hypothesisId": "H_soft_fail", "runId": "round3-fix"}, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
             except Exception as e:
                 # 其他异常（网络错误等）：抛出异常，确保任务失败并触发重试
                 logger.error(f"等待类目页加载失败: {page_url}, 错误: {e}")
