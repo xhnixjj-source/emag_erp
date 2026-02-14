@@ -117,8 +117,8 @@ class Config:
     LISTED_AT_BATCH_SIZE: int = int(os.getenv("LISTED_AT_BATCH_SIZE", "50"))
     LISTED_AT_SLEEP_SECONDS: float = float(os.getenv("LISTED_AT_SLEEP_SECONDS", "0.5"))
     
-    # Ranking page timeout (shorter than main page, reduces wasted time on ranking subpages)
-    RANKING_PAGE_TIMEOUT: int = int(os.getenv("RANKING_PAGE_TIMEOUT", "20000"))
+    # Ranking page timeout (与主页超时对齐, 类目页实际加载常需 12-18 秒)
+    RANKING_PAGE_TIMEOUT: int = int(os.getenv("RANKING_PAGE_TIMEOUT", "30000"))
     
     # Playwright configuration
     PLAYWRIGHT_BROWSER_TYPE: str = os.getenv("PLAYWRIGHT_BROWSER_TYPE", "chromium")

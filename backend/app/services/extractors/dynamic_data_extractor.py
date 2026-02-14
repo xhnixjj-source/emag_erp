@@ -1206,48 +1206,69 @@ class DynamicDataExtractor:
                 pass
             # #endregion
             
-            try:
-                category_page.goto(page_url, wait_until='domcontentloaded', timeout=config.RANKING_PAGE_TIMEOUT)
-                
-                # #region agent log
+            # ── 内部重试：类目页 goto 遇到瞬时网络错误时重试一次 ──
+            _MAX_CAT_GOTO = 2
+            for _cat_attempt in range(_MAX_CAT_GOTO):
                 try:
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json_cat_goto.dumps({
-                            "timestamp": int(_time_cat_goto.time() * 1000),
-                            "location": "dynamic_data_extractor.py:after_category_page_goto",
-                            "message": "类目页加载完成",
-                            "data": {
-                                "page_url": page_url,
-                                "elapsed_ms": int((_time_cat_goto.time() - _cat_goto_start) * 1000)
-                            },
-                            "hypothesisId": "H4",
-                            "runId": "timeout-debug"
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-            except Exception as _cat_goto_err:
-                # #region agent log
-                try:
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json_cat_goto.dumps({
-                            "timestamp": int(_time_cat_goto.time() * 1000),
-                            "location": "dynamic_data_extractor.py:category_page_goto_error",
-                            "message": "类目页加载失败",
-                            "data": {
-                                "page_url": page_url,
-                                "error_type": type(_cat_goto_err).__name__,
-                                "error_message": str(_cat_goto_err)[:300],
-                                "elapsed_ms": int((_time_cat_goto.time() - _cat_goto_start) * 1000),
-                                "timeout_ms": config.RANKING_PAGE_TIMEOUT
-                            },
-                            "hypothesisId": "H4",
-                            "runId": "timeout-debug"
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-                raise
+                    category_page.goto(page_url, wait_until='domcontentloaded', timeout=config.RANKING_PAGE_TIMEOUT)
+                    
+                    # #region agent log
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            _f.write(_json_cat_goto.dumps({
+                                "timestamp": int(_time_cat_goto.time() * 1000),
+                                "location": "dynamic_data_extractor.py:after_category_page_goto",
+                                "message": "类目页加载完成",
+                                "data": {
+                                    "page_url": page_url,
+                                    "elapsed_ms": int((_time_cat_goto.time() - _cat_goto_start) * 1000),
+                                    "attempt": _cat_attempt + 1
+                                },
+                                "hypothesisId": "H4",
+                                "runId": "timeout-debug"
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+                    break  # goto 成功
+                except Exception as _cat_goto_err:
+                    # #region agent log
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            _f.write(_json_cat_goto.dumps({
+                                "timestamp": int(_time_cat_goto.time() * 1000),
+                                "location": "dynamic_data_extractor.py:category_page_goto_error",
+                                "message": "类目页加载失败",
+                                "data": {
+                                    "page_url": page_url,
+                                    "error_type": type(_cat_goto_err).__name__,
+                                    "error_message": str(_cat_goto_err)[:300],
+                                    "elapsed_ms": int((_time_cat_goto.time() - _cat_goto_start) * 1000),
+                                    "timeout_ms": config.RANKING_PAGE_TIMEOUT,
+                                    "attempt": _cat_attempt + 1,
+                                    "will_retry": _cat_attempt < _MAX_CAT_GOTO - 1 and not isinstance(_cat_goto_err, PlaywrightTimeoutError)
+                                },
+                                "hypothesisId": "H9_category_no_retry",
+                                "runId": "retry-fix"
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+                    # 超时不重试（已消耗完整超时时间），非超时瞬时错误重试一次
+                    if _cat_attempt < _MAX_CAT_GOTO - 1 and not isinstance(_cat_goto_err, PlaywrightTimeoutError):
+                        logger.warning(
+                            f"[类目页] goto 失败(attempt {_cat_attempt+1})，3秒后重试: {_cat_goto_err}"
+                        )
+                        try:
+                            category_page.close()
+                        except Exception:
+                            pass
+                        _time_cat_goto.sleep(3)
+                        category_page = context.new_page()
+                        category_page.route("**/*", _strip_tracking_headers)
+                        _cat_goto_start = _time_cat_goto.time()  # 重置计时
+                    else:
+                        raise
 
             # 检测验证码
             try:
@@ -1474,48 +1495,68 @@ class DynamicDataExtractor:
                     pass
                 # #endregion
                 
-                try:
-                    shop_page.goto(page_url, wait_until='domcontentloaded', timeout=config.RANKING_PAGE_TIMEOUT)
-                    
-                    # #region agent log
+                # ── 内部重试：店铺页 goto 瞬时网络错误重试一次 ──
+                _MAX_STORE_GOTO = 2
+                for _store_attempt in range(_MAX_STORE_GOTO):
                     try:
-                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                            _f.write(_json_shop_goto.dumps({
-                                "timestamp": int(_time_shop_goto.time() * 1000),
-                                "location": "dynamic_data_extractor.py:after_store_page_goto",
-                                "message": "店铺页加载完成",
-                                "data": {
-                                    "page_url": page_url,
-                                    "elapsed_ms": int((_time_shop_goto.time() - _shop_goto_start) * 1000)
-                                },
-                                "hypothesisId": "H4",
-                                "runId": "timeout-debug"
-                            }, ensure_ascii=False) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
-                except Exception as _shop_goto_err:
-                    # #region agent log
-                    try:
-                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                            _f.write(_json_shop_goto.dumps({
-                                "timestamp": int(_time_shop_goto.time() * 1000),
-                                "location": "dynamic_data_extractor.py:store_page_goto_error",
-                                "message": "店铺页加载失败",
-                                "data": {
-                                    "page_url": page_url,
-                                    "error_type": type(_shop_goto_err).__name__,
-                                    "error_message": str(_shop_goto_err)[:300],
-                                    "elapsed_ms": int((_time_shop_goto.time() - _shop_goto_start) * 1000),
-                                    "timeout_ms": config.RANKING_PAGE_TIMEOUT
-                                },
-                                "hypothesisId": "H4",
-                                "runId": "timeout-debug"
-                            }, ensure_ascii=False) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
-                    raise
+                        shop_page.goto(page_url, wait_until='domcontentloaded', timeout=config.RANKING_PAGE_TIMEOUT)
+                        
+                        # #region agent log
+                        try:
+                            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                                _f.write(_json_shop_goto.dumps({
+                                    "timestamp": int(_time_shop_goto.time() * 1000),
+                                    "location": "dynamic_data_extractor.py:after_store_page_goto",
+                                    "message": "店铺页加载完成",
+                                    "data": {
+                                        "page_url": page_url,
+                                        "elapsed_ms": int((_time_shop_goto.time() - _shop_goto_start) * 1000),
+                                        "attempt": _store_attempt + 1
+                                    },
+                                    "hypothesisId": "H4",
+                                    "runId": "timeout-debug"
+                                }, ensure_ascii=False) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
+                        break  # goto 成功
+                    except Exception as _shop_goto_err:
+                        # #region agent log
+                        try:
+                            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                                _f.write(_json_shop_goto.dumps({
+                                    "timestamp": int(_time_shop_goto.time() * 1000),
+                                    "location": "dynamic_data_extractor.py:store_page_goto_error",
+                                    "message": "店铺页加载失败",
+                                    "data": {
+                                        "page_url": page_url,
+                                        "error_type": type(_shop_goto_err).__name__,
+                                        "error_message": str(_shop_goto_err)[:300],
+                                        "elapsed_ms": int((_time_shop_goto.time() - _shop_goto_start) * 1000),
+                                        "timeout_ms": config.RANKING_PAGE_TIMEOUT,
+                                        "attempt": _store_attempt + 1,
+                                        "will_retry": _store_attempt < _MAX_STORE_GOTO - 1 and not isinstance(_shop_goto_err, PlaywrightTimeoutError)
+                                    },
+                                    "hypothesisId": "H9_store_no_retry",
+                                    "runId": "retry-fix"
+                                }, ensure_ascii=False) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
+                        if _store_attempt < _MAX_STORE_GOTO - 1 and not isinstance(_shop_goto_err, PlaywrightTimeoutError):
+                            logger.warning(
+                                f"[店铺页] goto 失败(attempt {_store_attempt+1})，3秒后重试: {_shop_goto_err}"
+                            )
+                            try:
+                                shop_page.close()
+                            except Exception:
+                                pass
+                            _time_shop_goto.sleep(3)
+                            shop_page = context.new_page()
+                            shop_page.route("**/*", _remove_tracking_shop)
+                            _shop_goto_start = _time_shop_goto.time()
+                        else:
+                            raise
                 
                 # 检测验证码
                 try:
@@ -1838,11 +1879,52 @@ class DynamicDataExtractor:
                 except Exception:
                     pass
                 # #endregion
-                intro_page.goto(
-                    shop_intro_url,
-                    wait_until='domcontentloaded',
-                    timeout=config.PLAYWRIGHT_NAVIGATION_TIMEOUT
-                )
+                # ── 内部重试：ERR_EMPTY_RESPONSE 等瞬时网络错误重试一次 ──
+                _MAX_INTRO_GOTO = 2
+                for _intro_attempt in range(_MAX_INTRO_GOTO):
+                    try:
+                        intro_page.goto(
+                            shop_intro_url,
+                            wait_until='domcontentloaded',
+                            timeout=config.PLAYWRIGHT_NAVIGATION_TIMEOUT
+                        )
+                        break  # goto 成功，跳出重试循环
+                    except PlaywrightTimeoutError:
+                        raise  # 超时直接抛出，由外层 PlaywrightTimeoutError handler 处理
+                    except Exception as _goto_err:
+                        # #region agent log
+                        try:
+                            with open('d:\\emag_erp\\.cursor\\debug.log', 'a', encoding='utf-8') as _f:
+                                _f.write(_json_shop.dumps({
+                                    "timestamp": int(_time_shop.time() * 1000),
+                                    "location": "dynamic_data_extractor.py:_extract_shop_url_from_page:intro_goto_retry",
+                                    "message": "店铺介绍页goto失败",
+                                    "data": {
+                                        "product_url": page.url,
+                                        "shop_intro_url": shop_intro_url,
+                                        "attempt": _intro_attempt + 1,
+                                        "max_attempts": _MAX_INTRO_GOTO,
+                                        "error": str(_goto_err)[:200],
+                                        "will_retry": _intro_attempt < _MAX_INTRO_GOTO - 1
+                                    },
+                                    "hypothesisId": "H7_shop_intro_no_retry",
+                                    "runId": "retry-fix"
+                                }, ensure_ascii=False) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
+                        if _intro_attempt < _MAX_INTRO_GOTO - 1:
+                            logger.warning(
+                                f"[店铺介绍页] goto 失败(attempt {_intro_attempt+1})，3秒后重试: {_goto_err}"
+                            )
+                            try:
+                                intro_page.close()
+                            except Exception:
+                                pass
+                            _time_shop.sleep(3)
+                            intro_page = context.new_page()
+                        else:
+                            raise  # 最后一次仍失败，抛出给外层
                 # #region agent log
                 try:
                     with open('d:\\emag_erp\\.cursor\\debug.log', 'a', encoding='utf-8') as _f:

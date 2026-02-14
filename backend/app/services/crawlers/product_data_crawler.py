@@ -231,50 +231,63 @@ class ProductDataCrawler:
                 pass
             # #endregion
             
-            try:
-                # 使用更宽松的 load_state，避免网络长连接导致 networkidle 超时
-                page.goto(product_url, wait_until='domcontentloaded', timeout=config.PLAYWRIGHT_NAVIGATION_TIMEOUT)
-                
-                # #region agent log
+            # ── 内部重试：ERR_EMPTY_RESPONSE 等瞬时网络错误重试一次 ──
+            _MAX_PAGE_GOTO = 2
+            for _page_attempt in range(_MAX_PAGE_GOTO):
                 try:
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json_page_goto.dumps({
-                            "timestamp": int(time.time() * 1000),
-                            "location": "product_data_crawler.py:after_page_goto",
-                            "message": "产品页面加载完成",
-                            "data": {
-                                "url": product_url,
-                                "elapsed_ms": int((time.time() - load_start) * 1000)
-                            },
-                            "hypothesisId": "H1",
-                            "runId": "timeout-debug"
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-                
-            except Exception as e:
-                # #region agent log
-                try:
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json_page_goto.dumps({
-                            "timestamp": int(time.time() * 1000),
-                            "location": "product_data_crawler.py:page_goto_error",
-                            "message": "产品页面加载失败",
-                            "data": {
-                                "url": product_url,
-                                "error_type": type(e).__name__,
-                                "error_message": str(e)[:300],
-                                "elapsed_ms": int((time.time() - load_start) * 1000),
-                                "timeout_ms": config.PLAYWRIGHT_NAVIGATION_TIMEOUT
-                            },
-                            "hypothesisId": "H1",
-                            "runId": "timeout-debug"
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-                raise
+                    page.goto(product_url, wait_until='domcontentloaded', timeout=config.PLAYWRIGHT_NAVIGATION_TIMEOUT)
+                    
+                    # #region agent log
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            _f.write(_json_page_goto.dumps({
+                                "timestamp": int(time.time() * 1000),
+                                "location": "product_data_crawler.py:after_page_goto",
+                                "message": "产品页面加载完成",
+                                "data": {
+                                    "url": product_url,
+                                    "elapsed_ms": int((time.time() - load_start) * 1000),
+                                    "attempt": _page_attempt + 1
+                                },
+                                "hypothesisId": "H1",
+                                "runId": "timeout-debug"
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+                    break  # goto 成功
+                except Exception as e:
+                    # #region agent log
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            _f.write(_json_page_goto.dumps({
+                                "timestamp": int(time.time() * 1000),
+                                "location": "product_data_crawler.py:page_goto_error",
+                                "message": "产品页面加载失败",
+                                "data": {
+                                    "url": product_url,
+                                    "error_type": type(e).__name__,
+                                    "error_message": str(e)[:300],
+                                    "elapsed_ms": int((time.time() - load_start) * 1000),
+                                    "timeout_ms": config.PLAYWRIGHT_NAVIGATION_TIMEOUT,
+                                    "attempt": _page_attempt + 1,
+                                    "will_retry": _page_attempt < _MAX_PAGE_GOTO - 1 and not isinstance(e, PlaywrightTimeoutError)
+                                },
+                                "hypothesisId": "H10_product_goto_transient",
+                                "runId": "retry-fix"
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+                    # 超时不重试（已消耗完整超时时间），非超时瞬时错误重试一次
+                    if _page_attempt < _MAX_PAGE_GOTO - 1 and not isinstance(e, PlaywrightTimeoutError):
+                        logger.warning(
+                            f"[产品页] goto 失败(attempt {_page_attempt+1})，3秒后重试: {e}"
+                        )
+                        time.sleep(3)
+                        load_start = time.time()  # 重置计时
+                    else:
+                        raise
             load_elapsed = time.time() - load_start
             logger.debug(f"[页面加载] 产品页面加载完成 - URL: {product_url}, 加载耗时: {load_elapsed:.2f}秒")
             
