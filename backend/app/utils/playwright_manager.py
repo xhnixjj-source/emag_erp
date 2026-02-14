@@ -271,7 +271,9 @@ class PlaywrightContextPool:
     
     def release_context(self, context: BrowserContext):
         """
-        释放浏览器上下文（标记为可用，不关闭）
+        释放浏览器上下文。
+        - 代理模式：标记为可用，允许复用
+        - CDP 模式（BitBrowser）：立即关闭上下文和 CDP 连接，防止连接泄漏
         
         Args:
             context: 要释放的BrowserContext对象
@@ -287,10 +289,26 @@ class PlaywrightContextPool:
             
             if context_id:
                 context_info = self._contexts[context_id]
-                if context_info.is_valid and context_id not in self._available_contexts:
-                    self._available_contexts.append(context_id)
-                    context_info.last_used_at = time.time()
-                    logger.debug(f"Context {context_id} released and marked as available")
+                # CDP 模式：必须立即关闭，因为每次 acquire 都会创建新 CDP 连接，不可复用
+                if context_info.cdp_browser:
+                    # #region agent log
+                    import json as _json_rel, time as _time_rel
+                    _ctx_total = len(self._contexts)
+                    _cdp_count = sum(1 for c in self._contexts.values() if c.cdp_browser)
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            _f.write(_json_rel.dumps({"timestamp": int(_time_rel.time()*1000), "location": "playwright_manager.py:release_context:cdp_close", "message": "关闭CDP上下文和连接", "data": {"context_id": context_id, "window_id": context_info.window_id, "total_contexts": _ctx_total, "cdp_contexts": _cdp_count}, "hypothesisId": "H5_cdp_leak", "runId": "p2-cdp-fix"}, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+                    self._close_context(context_id)
+                    logger.debug(f"CDP context {context_id} (window: {context_info.window_id}) closed and removed")
+                else:
+                    # 代理模式：标记为可用，支持复用
+                    if context_info.is_valid and context_id not in self._available_contexts:
+                        self._available_contexts.append(context_id)
+                        context_info.last_used_at = time.time()
+                        logger.debug(f"Context {context_id} released and marked as available")
             else:
                 logger.warning("Attempted to release unknown context")
 
@@ -549,6 +567,17 @@ class PlaywrightContextPool:
             )
             
             self._contexts[context_id] = context_info
+            
+            # #region agent log
+            import json as _json_cdp_create, time as _time_cdp_create
+            _ctx_total_now = len(self._contexts)
+            _cdp_count_now = sum(1 for c in self._contexts.values() if c.cdp_browser)
+            try:
+                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                    _f.write(_json_cdp_create.dumps({"timestamp": int(_time_cdp_create.time()*1000), "location": "playwright_manager.py:_create_context_cdp:created", "message": "CDP上下文创建", "data": {"context_id": context_id, "window_id": window_id, "total_contexts": _ctx_total_now, "cdp_contexts": _cdp_count_now}, "hypothesisId": "H6_ctx_count", "runId": "p2-cdp-fix"}, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
             
             logger.info(
                 f"[CDP连接] 浏览器上下文创建成功 - context_id: {context_id}, window_id: {window_id}"
