@@ -1206,8 +1206,8 @@ class DynamicDataExtractor:
                 pass
             # #endregion
             
-            # ── 内部重试：类目页 goto 遇到瞬时网络错误时重试一次 ──
-            _MAX_CAT_GOTO = 2
+            # ── 内部重试：类目页 goto 遇到瞬时网络错误时重试 ──
+            _MAX_CAT_GOTO = 3
             for _cat_attempt in range(_MAX_CAT_GOTO):
                 try:
                     category_page.goto(page_url, wait_until='domcontentloaded', timeout=config.RANKING_PAGE_TIMEOUT)
@@ -1263,7 +1263,7 @@ class DynamicDataExtractor:
                             category_page.close()
                         except Exception:
                             pass
-                        _time_cat_goto.sleep(3)
+                        _time_cat_goto.sleep(5)
                         category_page = context.new_page()
                         category_page.route("**/*", _strip_tracking_headers)
                         _cat_goto_start = _time_cat_goto.time()  # 重置计时
@@ -1286,14 +1286,14 @@ class DynamicDataExtractor:
 
             # 等待页面完全加载
             try:
-                # 等待card_grid容器出现
+                # 等待card_grid容器出现（goto 后 JS 渲染仍需时间）
                 card_grid = category_page.locator('#card_grid')
-                card_grid.wait_for(state='attached', timeout=10000)
+                card_grid.wait_for(state='attached', timeout=20000)
                 
                 # 等待至少一个产品卡片加载完成
                 category_page.wait_for_selector(
                     '.card-item.card-standard.js-product-data.js-card-clickable',
-                    timeout=10000
+                    timeout=20000
                 )
                 
                 # 额外等待500ms确保动态内容加载完成
@@ -1495,8 +1495,8 @@ class DynamicDataExtractor:
                     pass
                 # #endregion
                 
-                # ── 内部重试：店铺页 goto 瞬时网络错误重试一次 ──
-                _MAX_STORE_GOTO = 2
+                # ── 内部重试：店铺页 goto 瞬时网络错误重试 ──
+                _MAX_STORE_GOTO = 3
                 for _store_attempt in range(_MAX_STORE_GOTO):
                     try:
                         shop_page.goto(page_url, wait_until='domcontentloaded', timeout=config.RANKING_PAGE_TIMEOUT)
@@ -1551,7 +1551,7 @@ class DynamicDataExtractor:
                                 shop_page.close()
                             except Exception:
                                 pass
-                            _time_shop_goto.sleep(3)
+                            _time_shop_goto.sleep(5)
                             shop_page = context.new_page()
                             shop_page.route("**/*", _remove_tracking_shop)
                             _shop_goto_start = _time_shop_goto.time()
@@ -1879,8 +1879,8 @@ class DynamicDataExtractor:
                 except Exception:
                     pass
                 # #endregion
-                # ── 内部重试：ERR_EMPTY_RESPONSE 等瞬时网络错误重试一次 ──
-                _MAX_INTRO_GOTO = 2
+                # ── 内部重试：ERR_EMPTY_RESPONSE 等瞬时网络错误重试 ──
+                _MAX_INTRO_GOTO = 3
                 for _intro_attempt in range(_MAX_INTRO_GOTO):
                     try:
                         intro_page.goto(
@@ -1921,7 +1921,7 @@ class DynamicDataExtractor:
                                 intro_page.close()
                             except Exception:
                                 pass
-                            _time_shop.sleep(3)
+                            _time_shop.sleep(5)
                             intro_page = context.new_page()
                         else:
                             raise  # 最后一次仍失败，抛出给外层

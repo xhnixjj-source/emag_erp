@@ -231,8 +231,8 @@ class ProductDataCrawler:
                 pass
             # #endregion
             
-            # ── 内部重试：ERR_EMPTY_RESPONSE 等瞬时网络错误重试一次 ──
-            _MAX_PAGE_GOTO = 2
+            # ── 内部重试：ERR_EMPTY_RESPONSE 等瞬时网络错误重试 ──
+            _MAX_PAGE_GOTO = 3
             for _page_attempt in range(_MAX_PAGE_GOTO):
                 try:
                     page.goto(product_url, wait_until='domcontentloaded', timeout=config.PLAYWRIGHT_NAVIGATION_TIMEOUT)
@@ -282,9 +282,9 @@ class ProductDataCrawler:
                     # 超时不重试（已消耗完整超时时间），非超时瞬时错误重试一次
                     if _page_attempt < _MAX_PAGE_GOTO - 1 and not isinstance(e, PlaywrightTimeoutError):
                         logger.warning(
-                            f"[产品页] goto 失败(attempt {_page_attempt+1})，3秒后重试: {e}"
+                            f"[产品页] goto 失败(attempt {_page_attempt+1}/{_MAX_PAGE_GOTO})，5秒后重试: {e}"
                         )
-                        time.sleep(3)
+                        time.sleep(5)
                         load_start = time.time()  # 重置计时
                     else:
                         raise

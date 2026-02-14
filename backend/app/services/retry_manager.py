@@ -87,6 +87,17 @@ class RetryManager:
                     return ErrorType.CONNECTION
                 elif 'browser' in error_name.lower() or 'disconnect' in error_str or 'disconnected' in error_str:
                     return ErrorType.DISCONNECT
+                # Playwright Error 未匹配到以上分支，使用 err_empty_response 等关键词再匹配
+                elif any(kw in error_str for kw in ['err_empty_response', 'err_connection', 'net::err_', 'econnrefused']):
+                    # #region agent log
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            import json as _j_pw, time as _t_pw
+                            _f.write(_j_pw.dumps({"timestamp": int(_t_pw.time()*1000), "location": "retry_manager.py:classify_error:pw_connection_fallback", "message": "Playwright Error via keyword fallback -> CONNECTION", "data": {"error_name": error_name, "error_str_preview": error_str[:200]}, "hypothesisId": "H3_classify_gap", "runId": "round2-fix"}, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+                    return ErrorType.CONNECTION
         except ImportError:
             # Playwright未安装，使用字符串匹配
             pass
