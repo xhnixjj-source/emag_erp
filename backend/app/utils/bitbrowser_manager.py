@@ -34,6 +34,7 @@ class BitBrowserWindowInfo:
     restart_count: int = 0
     last_restart_at: float = 0.0
     cool_down_until: float = 0.0  # 窗口冷却截止时间（用于处理临时网络/代理问题）
+    task_count: int = 0  # 自上次重启以来已完成的任务数
 
 
 class BitBrowserManager:
@@ -270,7 +271,12 @@ class BitBrowserManager:
             return None
 
     def release_window(self, window_id: str) -> None:
-        """释放独占窗口（共享模式下可以不调用）"""
+        """
+        释放独占窗口。
+        每个窗口连续完成 BITBROWSER_MAX_TASKS_PER_WINDOW 个任务后，
+        自动关闭并重新打开窗口（相当于重启浏览器进程），清空内存/缓存/Cookie，
+        保持每个窗口始终处于"刚启动"的最佳状态。
+        """
         if not window_id:
             return
         with self._window_available:
@@ -282,11 +288,59 @@ class BitBrowserManager:
             import json as _json, time as _time
             _was_in_use = info.in_use
             with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json.dumps({"timestamp": int(_time.time()*1000), "location": "bitbrowser_manager.py:release_window", "message": "Releasing window", "data": {"window_id": window_id, "was_in_use": _was_in_use}, "hypothesisId": "H2", "runId": "post-fix"}) + "\n")
+                _f.write(_json.dumps({"timestamp": int(_time.time()*1000), "location": "bitbrowser_manager.py:release_window", "message": "Releasing window", "data": {"window_id": window_id, "was_in_use": _was_in_use, "task_count": info.task_count}, "hypothesisId": "H2", "runId": "post-fix"}) + "\n")
             # #endregion
             if info.in_use:
                 info.in_use = False
-                logger.debug("[BitBrowser] 释放独占窗口: %s", window_id)
+                info.task_count += 1
+                logger.debug(
+                    "[BitBrowser] 释放独占窗口: %s (task_count=%d)",
+                    window_id, info.task_count,
+                )
+
+                # ── 主动轮换：达到任务上限后关闭并重新打开窗口 ──
+                max_tasks = int(getattr(config, "BITBROWSER_MAX_TASKS_PER_WINDOW", 5))
+                if info.task_count >= max_tasks:
+                    logger.info(
+                        "[BitBrowser] 窗口达到任务上限(%d/%d)，主动重启以清空浏览器状态 - id=%s",
+                        info.task_count, max_tasks, window_id,
+                    )
+                    # #region agent log
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            _f.write(_json.dumps({
+                                "timestamp": int(_time.time() * 1000),
+                                "location": "bitbrowser_manager.py:release_window:proactive_restart",
+                                "message": "窗口达到任务上限，主动重启",
+                                "data": {
+                                    "window_id": window_id,
+                                    "task_count": info.task_count,
+                                    "max_tasks": max_tasks,
+                                },
+                                "hypothesisId": "H_proactive_restart",
+                                "runId": "window-rotate",
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+                    try:
+                        self._close_window_api(window_id)
+                        time.sleep(2)  # 等待浏览器进程完全退出
+                        ws = self._open_window_api(window_id)
+                        info.ws_url = ws
+                        info.task_count = 0
+                        logger.info(
+                            "[BitBrowser] 窗口主动重启成功 - id=%s, new_ws=%s",
+                            window_id, ws,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "[BitBrowser] 窗口主动重启失败，清除缓存待下次重新打开 - id=%s, error=%s",
+                            window_id, e,
+                        )
+                        info.ws_url = None  # 清除缓存，下次 acquire 时 _ensure_window_open 会重新打开
+                        info.task_count = 0  # 重置计数，避免反复尝试
+
                 # 通知等待中的线程有窗口可用了
                 self._window_available.notify()
 

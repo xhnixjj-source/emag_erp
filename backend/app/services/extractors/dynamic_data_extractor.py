@@ -496,22 +496,25 @@ class DynamicDataExtractor:
                             logger.error(f"[店铺URL提取失败] 已获取到店铺介绍页URL但未获取到店铺商品列表URL - URL: {product_url}, shop_intro_url: {shop_intro_url}, 错误: {e}")
                             # #region agent log
                             import json as _json_rank_shop_fail
-                            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                                _f.write(_json_rank_shop_fail.dumps({
-                                    "timestamp": int(time.time() * 1000),
-                                    "location": "dynamic_data_extractor.py:extract_rankings:shop_url_extraction_failed",
-                                    "message": "店铺URL提取失败，抛出异常",
-                                    "data": {
-                                        "product_url": product_url,
-                                        "product_id": product_id,
-                                        "category_url": category_url,
-                                        "shop_intro_url": shop_intro_url,
-                                        "error": str(e)[:200],
-                                        "error_type": type(e).__name__
-                                    },
-                                    "hypothesisId": "H_rank_shop_extraction_failed",
-                                    "runId": "shop-url-fix"
-                                }, ensure_ascii=False) + "\n")
+                            try:
+                                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                                    _f.write(_json_rank_shop_fail.dumps({
+                                        "timestamp": int(time.time() * 1000),
+                                        "location": "dynamic_data_extractor.py:extract_rankings:shop_url_extraction_failed",
+                                        "message": "店铺URL提取失败，抛出异常",
+                                        "data": {
+                                            "product_url": product_url,
+                                            "product_id": product_id,
+                                            "category_url": category_url,
+                                            "shop_intro_url": shop_intro_url,
+                                            "error": str(e)[:200],
+                                            "error_type": type(e).__name__
+                                        },
+                                        "hypothesisId": "H_rank_shop_extraction_failed",
+                                        "runId": "shop-url-fix"
+                                    }, ensure_ascii=False) + "\n")
+                            except Exception:
+                                pass
                             # #endregion
                             # 抛出异常，确保任务失败并触发重试
                             raise
@@ -520,20 +523,23 @@ class DynamicDataExtractor:
                             logger.warning(f"[店铺URL超时] 未获取到店铺介绍页URL，仅跳过店铺排名 - URL: {product_url}, 错误: {e}")
                             # #region agent log
                             import json as _json_rank_shop_to
-                            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                                _f.write(_json_rank_shop_to.dumps({
-                                    "timestamp": int(time.time() * 1000),
-                                    "location": "dynamic_data_extractor.py:extract_rankings:shop_timeout_no_intro",
-                                    "message": "店铺URL获取超时（无shop_intro_url），仅跳过store_rank",
-                                    "data": {
-                                        "product_url": product_url,
-                                        "product_id": product_id,
-                                        "category_url": category_url,
-                                        "error": str(e)[:200]
-                                    },
-                                    "hypothesisId": "H_rank_shop_timeout_no_intro",
-                                    "runId": "shop-url-fix"
-                                }, ensure_ascii=False) + "\n")
+                            try:
+                                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                                    _f.write(_json_rank_shop_to.dumps({
+                                        "timestamp": int(time.time() * 1000),
+                                        "location": "dynamic_data_extractor.py:extract_rankings:shop_timeout_no_intro",
+                                        "message": "店铺URL获取超时（无shop_intro_url），仅跳过store_rank",
+                                        "data": {
+                                            "product_url": product_url,
+                                            "product_id": product_id,
+                                            "category_url": category_url,
+                                            "error": str(e)[:200]
+                                        },
+                                        "hypothesisId": "H_rank_shop_timeout_no_intro",
+                                        "runId": "shop-url-fix"
+                                    }, ensure_ascii=False) + "\n")
+                            except Exception:
+                                pass
                             # #endregion
                             shop_url = None
                     except Exception as e:
@@ -542,22 +548,25 @@ class DynamicDataExtractor:
                             logger.error(f"[店铺URL提取失败] 已获取到店铺介绍页URL但未获取到店铺商品列表URL - URL: {product_url}, shop_intro_url: {shop_intro_url}, 错误: {e}")
                             # #region agent log
                             import json as _json_rank_shop_err
-                            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                                _f.write(_json_rank_shop_err.dumps({
-                                    "timestamp": int(time.time() * 1000),
-                                    "location": "dynamic_data_extractor.py:extract_rankings:shop_url_extraction_error",
-                                    "message": "店铺URL提取失败（其他异常），抛出异常",
-                                    "data": {
-                                        "product_url": product_url,
-                                        "product_id": product_id,
-                                        "category_url": category_url,
-                                        "shop_intro_url": shop_intro_url,
-                                        "error": str(e)[:200],
-                                        "error_type": type(e).__name__
-                                    },
-                                    "hypothesisId": "H_rank_shop_extraction_error",
-                                    "runId": "shop-url-fix"
-                                }, ensure_ascii=False) + "\n")
+                            try:
+                                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                                    _f.write(_json_rank_shop_err.dumps({
+                                        "timestamp": int(time.time() * 1000),
+                                        "location": "dynamic_data_extractor.py:extract_rankings:shop_url_extraction_error",
+                                        "message": "店铺URL提取失败（其他异常），抛出异常",
+                                        "data": {
+                                            "product_url": product_url,
+                                            "product_id": product_id,
+                                            "category_url": category_url,
+                                            "shop_intro_url": shop_intro_url,
+                                            "error": str(e)[:200],
+                                            "error_type": type(e).__name__
+                                        },
+                                        "hypothesisId": "H_rank_shop_extraction_error",
+                                        "runId": "shop-url-fix"
+                                    }, ensure_ascii=False) + "\n")
+                            except Exception:
+                                pass
                             # #endregion
                             # 抛出异常，确保任务失败并触发重试
                             raise
@@ -573,22 +582,25 @@ class DynamicDataExtractor:
                             logger.error(f"[店铺URL提取失败] {error_msg} - URL: {product_url}, 产品ID: {product_id}")
                             # #region agent log
                             import json as _json_rank_shop_missing
-                            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                                _f.write(_json_rank_shop_missing.dumps({
-                                    "timestamp": int(time.time() * 1000),
-                                    "location": "dynamic_data_extractor.py:extract_rankings:shop_url_missing_after_intro",
-                                    "message": "店铺URL缺失（已有shop_intro_url），抛出异常",
-                                    "data": {
-                                        "product_url": product_url,
-                                        "product_id": product_id,
-                                        "category_url": category_url,
-                                        "shop_intro_url": shop_intro_url,
-                                        "extract_shop_url_called": True,
-                                        "extract_shop_url_returned_none": True
-                                    },
-                                    "hypothesisId": "H_rank_shop_missing_after_intro",
-                                    "runId": "shop-url-fix"
-                                }, ensure_ascii=False) + "\n")
+                            try:
+                                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                                    _f.write(_json_rank_shop_missing.dumps({
+                                        "timestamp": int(time.time() * 1000),
+                                        "location": "dynamic_data_extractor.py:extract_rankings:shop_url_missing_after_intro",
+                                        "message": "店铺URL缺失（已有shop_intro_url），抛出异常",
+                                        "data": {
+                                            "product_url": product_url,
+                                            "product_id": product_id,
+                                            "category_url": category_url,
+                                            "shop_intro_url": shop_intro_url,
+                                            "extract_shop_url_called": True,
+                                            "extract_shop_url_returned_none": True
+                                        },
+                                        "hypothesisId": "H_rank_shop_missing_after_intro",
+                                        "runId": "shop-url-fix"
+                                    }, ensure_ascii=False) + "\n")
+                            except Exception:
+                                pass
                             # #endregion
                             # 抛出异常，确保任务失败并触发重试
                             raise ValueError(error_msg)
@@ -645,20 +657,23 @@ class DynamicDataExtractor:
                     )
                 # #region agent log
                 import json as _json_cat_timeout
-                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                    _f.write(_json_cat_timeout.dumps({
-                        "timestamp": int(time.time() * 1000),
-                        "location": "dynamic_data_extractor.py:extract_rankings:category_rank_timeout",
-                        "message": "类目排名提取超时，抛出异常",
-                        "data": {
-                            "product_url": product_url,
-                            "product_id": product_id,
-                            "category_url": category_url,
-                            "error": str(e)[:200]
-                        },
-                        "hypothesisId": "H_rank_cat_timeout",
-                        "runId": "ranking-fix"
-                    }, ensure_ascii=False) + "\n")
+                try:
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_json_cat_timeout.dumps({
+                            "timestamp": int(time.time() * 1000),
+                            "location": "dynamic_data_extractor.py:extract_rankings:category_rank_timeout",
+                            "message": "类目排名提取超时，抛出异常",
+                            "data": {
+                                "product_url": product_url,
+                                "product_id": product_id,
+                                "category_url": category_url,
+                                "error": str(e)[:200]
+                            },
+                            "hypothesisId": "H_rank_cat_timeout",
+                            "runId": "ranking-fix"
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
                 # #endregion
                 # 抛出异常，确保任务失败并触发重试
                 raise
@@ -673,20 +688,23 @@ class DynamicDataExtractor:
                         )
                     # #region agent log
                     import json as _json_cat_captcha
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json_cat_captcha.dumps({
-                            "timestamp": int(time.time() * 1000),
-                            "location": "dynamic_data_extractor.py:extract_rankings:category_rank_captcha",
-                            "message": "类目排名提取遇到验证码，抛出异常",
-                            "data": {
-                                "product_url": product_url,
-                                "product_id": product_id,
-                                "category_url": category_url,
-                                "error": str(e)[:200]
-                            },
-                            "hypothesisId": "H_rank_cat_captcha",
-                            "runId": "ranking-fix"
-                        }, ensure_ascii=False) + "\n")
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            _f.write(_json_cat_captcha.dumps({
+                                "timestamp": int(time.time() * 1000),
+                                "location": "dynamic_data_extractor.py:extract_rankings:category_rank_captcha",
+                                "message": "类目排名提取遇到验证码，抛出异常",
+                                "data": {
+                                    "product_url": product_url,
+                                    "product_id": product_id,
+                                    "category_url": category_url,
+                                    "error": str(e)[:200]
+                                },
+                                "hypothesisId": "H_rank_cat_captcha",
+                                "runId": "ranking-fix"
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
                     # #endregion
                     # 抛出异常，确保任务失败并触发重试
                     raise
@@ -703,21 +721,24 @@ class DynamicDataExtractor:
                     )
                 # #region agent log
                 import json as _json_cat_error
-                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                    _f.write(_json_cat_error.dumps({
-                        "timestamp": int(time.time() * 1000),
-                        "location": "dynamic_data_extractor.py:extract_rankings:category_rank_error",
-                        "message": "类目排名提取失败，抛出异常",
-                        "data": {
-                            "product_url": product_url,
-                            "product_id": product_id,
-                            "category_url": category_url,
-                            "error": str(e)[:200],
-                            "error_type": type(e).__name__
-                        },
-                        "hypothesisId": "H_rank_cat_error",
-                        "runId": "ranking-fix"
-                    }, ensure_ascii=False) + "\n")
+                try:
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_json_cat_error.dumps({
+                            "timestamp": int(time.time() * 1000),
+                            "location": "dynamic_data_extractor.py:extract_rankings:category_rank_error",
+                            "message": "类目排名提取失败，抛出异常",
+                            "data": {
+                                "product_url": product_url,
+                                "product_id": product_id,
+                                "category_url": category_url,
+                                "error": str(e)[:200],
+                                "error_type": type(e).__name__
+                            },
+                            "hypothesisId": "H_rank_cat_error",
+                            "runId": "ranking-fix"
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
                 # #endregion
                 # 抛出异常，确保任务失败并触发重试
                 raise
@@ -743,15 +764,18 @@ class DynamicDataExtractor:
                         )
                     # #region agent log
                     import json as _json_store_to
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json_store_to.dumps({
-                            "timestamp": int(time.time() * 1000),
-                            "location": "dynamic_data_extractor.py:extract_rankings:store_timeout",
-                            "message": "店铺排名提取超时，抛出异常",
-                            "data": {"product_url": product_url, "product_id": product_id, "shop_url": shop_url, "error": str(store_to)[:200]},
-                            "hypothesisId": "H_rank_store_timeout",
-                            "runId": "ranking-fix"
-                        }, ensure_ascii=False) + "\n")
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            _f.write(_json_store_to.dumps({
+                                "timestamp": int(time.time() * 1000),
+                                "location": "dynamic_data_extractor.py:extract_rankings:store_timeout",
+                                "message": "店铺排名提取超时，抛出异常",
+                                "data": {"product_url": product_url, "product_id": product_id, "shop_url": shop_url, "error": str(store_to)[:200]},
+                                "hypothesisId": "H_rank_store_timeout",
+                                "runId": "ranking-fix"
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
                     # #endregion
                     # 抛出异常，确保任务失败并触发重试
                     raise
@@ -766,15 +790,18 @@ class DynamicDataExtractor:
                             )
                         # #region agent log
                         import json as _json_store_captcha
-                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                            _f.write(_json_store_captcha.dumps({
-                                "timestamp": int(time.time() * 1000),
-                                "location": "dynamic_data_extractor.py:extract_rankings:store_rank_captcha",
-                                "message": "店铺排名提取遇到验证码，抛出异常",
-                                "data": {"product_url": product_url, "product_id": product_id, "shop_url": shop_url, "error": str(e)[:200]},
-                                "hypothesisId": "H_rank_store_captcha",
-                                "runId": "ranking-fix"
-                            }, ensure_ascii=False) + "\n")
+                        try:
+                            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                                _f.write(_json_store_captcha.dumps({
+                                    "timestamp": int(time.time() * 1000),
+                                    "location": "dynamic_data_extractor.py:extract_rankings:store_rank_captcha",
+                                    "message": "店铺排名提取遇到验证码，抛出异常",
+                                    "data": {"product_url": product_url, "product_id": product_id, "shop_url": shop_url, "error": str(e)[:200]},
+                                    "hypothesisId": "H_rank_store_captcha",
+                                    "runId": "ranking-fix"
+                                }, ensure_ascii=False) + "\n")
+                        except Exception:
+                            pass
                         # #endregion
                         # 抛出异常，确保任务失败并触发重试
                         raise
@@ -791,21 +818,24 @@ class DynamicDataExtractor:
                         )
                     # #region agent log
                     import json as _json_store_error
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json_store_error.dumps({
-                            "timestamp": int(time.time() * 1000),
-                            "location": "dynamic_data_extractor.py:extract_rankings:store_rank_error",
-                            "message": "店铺排名提取失败，抛出异常",
-                            "data": {
-                                "product_url": product_url,
-                                "product_id": product_id,
-                                "shop_url": shop_url,
-                                "error": str(store_rank_error)[:200],
-                                "error_type": type(store_rank_error).__name__
-                            },
-                            "hypothesisId": "H_rank_store_error",
-                            "runId": "ranking-fix"
-                        }, ensure_ascii=False) + "\n")
+                    try:
+                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                            _f.write(_json_store_error.dumps({
+                                "timestamp": int(time.time() * 1000),
+                                "location": "dynamic_data_extractor.py:extract_rankings:store_rank_error",
+                                "message": "店铺排名提取失败，抛出异常",
+                                "data": {
+                                    "product_url": product_url,
+                                    "product_id": product_id,
+                                    "shop_url": shop_url,
+                                    "error": str(store_rank_error)[:200],
+                                    "error_type": type(store_rank_error).__name__
+                                },
+                                "hypothesisId": "H_rank_store_error",
+                                "runId": "ranking-fix"
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
                     # #endregion
                     # 抛出异常，确保任务失败并触发重试
                     raise
@@ -823,15 +853,18 @@ class DynamicDataExtractor:
                 )
             # #region agent log
             import json as _json_rank_to
-            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json_rank_to.dumps({
-                    "timestamp": int(time.time() * 1000),
-                    "location": "dynamic_data_extractor.py:extract_rankings:timeout_outer",
-                    "message": "排名阶段超时, 抛出异常",
-                    "data": {"product_url": product_url, "error": str(e)[:200]},
-                    "hypothesisId": "H_rank_outer_timeout",
-                    "runId": "ranking-fix"
-                }, ensure_ascii=False) + "\n")
+            try:
+                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                    _f.write(_json_rank_to.dumps({
+                        "timestamp": int(time.time() * 1000),
+                        "location": "dynamic_data_extractor.py:extract_rankings:timeout_outer",
+                        "message": "排名阶段超时, 抛出异常",
+                        "data": {"product_url": product_url, "error": str(e)[:200]},
+                        "hypothesisId": "H_rank_outer_timeout",
+                        "runId": "ranking-fix"
+                    }, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
             # #endregion
             # 抛出异常，确保任务失败并触发重试
             raise
@@ -845,19 +878,22 @@ class DynamicDataExtractor:
                 )
             # #region agent log
             import json as _json_rank_err_outer
-            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json_rank_err_outer.dumps({
-                    "timestamp": int(time.time() * 1000),
-                    "location": "dynamic_data_extractor.py:extract_rankings:error_outer",
-                    "message": "排名提取失败（外层异常），抛出异常",
-                    "data": {
-                        "product_url": product_url,
-                        "error": str(e)[:200],
-                        "error_type": type(e).__name__
-                    },
-                    "hypothesisId": "H_rank_outer_error",
-                    "runId": "ranking-fix"
-                }, ensure_ascii=False) + "\n")
+            try:
+                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                    _f.write(_json_rank_err_outer.dumps({
+                        "timestamp": int(time.time() * 1000),
+                        "location": "dynamic_data_extractor.py:extract_rankings:error_outer",
+                        "message": "排名提取失败（外层异常），抛出异常",
+                        "data": {
+                            "product_url": product_url,
+                            "error": str(e)[:200],
+                            "error_type": type(e).__name__
+                        },
+                        "hypothesisId": "H_rank_outer_error",
+                        "runId": "ranking-fix"
+                    }, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
             # #endregion
             # 抛出异常，确保任务失败并触发重试
             raise

@@ -76,6 +76,9 @@ class Config:
     BITBROWSER_WINDOW_IDS: List[str] = os.getenv("BITBROWSER_WINDOW_IDS", "").split(",") if os.getenv("BITBROWSER_WINDOW_IDS") else []
     BITBROWSER_MAX_RESTART_COUNT: int = int(os.getenv("BITBROWSER_MAX_RESTART_COUNT", "10"))
     BITBROWSER_RESTART_DELAY: int = int(os.getenv("BITBROWSER_RESTART_DELAY", "5"))
+    # 每个窗口连续处理多少个任务后主动重启（关闭→重新打开），清空浏览器状态
+    # 目的：避免浏览器内存泄漏、Cookie/缓存累积、目标网站行为追踪导致后续任务失败率升高
+    BITBROWSER_MAX_TASKS_PER_WINDOW: int = int(os.getenv("BITBROWSER_MAX_TASKS_PER_WINDOW", "5"))
 
     # Crawler configuration
     CRAWLER_DELAY_MIN: int = int(os.getenv("CRAWLER_DELAY_MIN", "1"))
