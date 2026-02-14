@@ -12,6 +12,7 @@
 """
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -60,7 +61,9 @@ class BitBrowserManager:
         self._max_restart: int = int(getattr(config, "BITBROWSER_MAX_RESTART_COUNT", 10))
         self._restart_delay: int = int(getattr(config, "BITBROWSER_RESTART_DELAY", 5))
         self._lock = threading.RLock()
-        self._window_available = threading.Condition(self._lock)  # 窗口可用通知
+        self._window_available = threading.Condition(self._lock)
+        # BitBrowser API 串行锁：确保 open/close 请求逐个执行，防止并发压垮本地 API
+        self._api_lock = threading.Lock()  # 窗口可用通知
 
         # ── 获取窗口 ID 列表 ──
         # 优先从窗口组动态拉取；fallback 到手动配置
@@ -85,8 +88,12 @@ class BitBrowserManager:
                 if wid.strip()
             ]
 
+        # 错开各窗口的初始 task_count，使它们不会同时达到 max_tasks 触发重启
+        # 例如 max_tasks=5, 3个窗口 → 初始 task_count 分别为 0, 1, 2
+        _max_tasks = int(os.getenv("BITBROWSER_MAX_TASKS_PER_WINDOW", "5"))
         self._windows: Dict[str, BitBrowserWindowInfo] = {
-            wid: BitBrowserWindowInfo(window_id=wid) for wid in raw_ids
+            wid: BitBrowserWindowInfo(window_id=wid, task_count=idx % _max_tasks)
+            for idx, wid in enumerate(raw_ids)
         }
         self._initialized = True
 
@@ -276,9 +283,17 @@ class BitBrowserManager:
         每个窗口连续完成 BITBROWSER_MAX_TASKS_PER_WINDOW 个任务后，
         自动关闭并重新打开窗口（相当于重启浏览器进程），清空内存/缓存/Cookie，
         保持每个窗口始终处于"刚启动"的最佳状态。
+
+        注意：主动重启时会先释放主锁再调 API，避免阻塞其他窗口的获取/释放。
+        重启期间 in_use 保持 True，防止其他线程抢到正在重启的窗口。
         """
         if not window_id:
             return
+
+        need_restart = False
+        info = None
+
+        # ── 第一段加锁：判断是否需要重启，不需要则直接释放 ──
         with self._window_available:
             info = self._windows.get(window_id)
             if not info:
@@ -287,62 +302,85 @@ class BitBrowserManager:
             # #region agent log
             import json as _json, time as _time
             _was_in_use = info.in_use
-            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json.dumps({"timestamp": int(_time.time()*1000), "location": "bitbrowser_manager.py:release_window", "message": "Releasing window", "data": {"window_id": window_id, "was_in_use": _was_in_use, "task_count": info.task_count}, "hypothesisId": "H2", "runId": "post-fix"}) + "\n")
+            try:
+                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                    _f.write(_json.dumps({"timestamp": int(_time.time()*1000), "location": "bitbrowser_manager.py:release_window", "message": "Releasing window", "data": {"window_id": window_id, "was_in_use": _was_in_use, "task_count": info.task_count}, "hypothesisId": "H2", "runId": "post-fix"}) + "\n")
+            except Exception:
+                pass
             # #endregion
-            if info.in_use:
-                info.in_use = False
-                info.task_count += 1
-                logger.debug(
-                    "[BitBrowser] 释放独占窗口: %s (task_count=%d)",
-                    window_id, info.task_count,
+            if not info.in_use:
+                return
+
+            info.task_count += 1
+            logger.debug(
+                "[BitBrowser] 释放独占窗口: %s (task_count=%d)",
+                window_id, info.task_count,
+            )
+
+            max_tasks = int(getattr(config, "BITBROWSER_MAX_TASKS_PER_WINDOW", 5))
+            if info.task_count >= max_tasks:
+                # 需要重启：保持 in_use=True，防止其他线程抢到
+                need_restart = True
+                logger.info(
+                    "[BitBrowser] 窗口达到任务上限(%d/%d)，主动重启以清空浏览器状态 - id=%s",
+                    info.task_count, max_tasks, window_id,
                 )
-
-                # ── 主动轮换：达到任务上限后关闭并重新打开窗口 ──
-                max_tasks = int(getattr(config, "BITBROWSER_MAX_TASKS_PER_WINDOW", 5))
-                if info.task_count >= max_tasks:
-                    logger.info(
-                        "[BitBrowser] 窗口达到任务上限(%d/%d)，主动重启以清空浏览器状态 - id=%s",
-                        info.task_count, max_tasks, window_id,
+                # #region agent log
+                try:
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_json.dumps({
+                            "timestamp": int(_time.time() * 1000),
+                            "location": "bitbrowser_manager.py:release_window:proactive_restart",
+                            "message": "窗口达到任务上限，主动重启",
+                            "data": {
+                                "window_id": window_id,
+                                "task_count": info.task_count,
+                                "max_tasks": max_tasks,
+                            },
+                            "hypothesisId": "H_proactive_restart",
+                            "runId": "window-rotate",
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+            else:
+                # 不需要重启：释放窗口，并设置冷却期以降低同一代理IP的请求频率
+                info.in_use = False
+                cooldown = int(getattr(config, "BITBROWSER_TASK_COOLDOWN", 10))
+                if cooldown > 0:
+                    info.cool_down_until = time.time() + cooldown
+                    logger.debug(
+                        "[BitBrowser] 窗口进入冷却期: %s (冷却%d秒)",
+                        window_id, cooldown,
                     )
-                    # #region agent log
-                    try:
-                        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                            _f.write(_json.dumps({
-                                "timestamp": int(_time.time() * 1000),
-                                "location": "bitbrowser_manager.py:release_window:proactive_restart",
-                                "message": "窗口达到任务上限，主动重启",
-                                "data": {
-                                    "window_id": window_id,
-                                    "task_count": info.task_count,
-                                    "max_tasks": max_tasks,
-                                },
-                                "hypothesisId": "H_proactive_restart",
-                                "runId": "window-rotate",
-                            }, ensure_ascii=False) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
-                    try:
-                        self._close_window_api(window_id)
-                        time.sleep(2)  # 等待浏览器进程完全退出
-                        ws = self._open_window_api(window_id)
-                        info.ws_url = ws
-                        info.task_count = 0
-                        logger.info(
-                            "[BitBrowser] 窗口主动重启成功 - id=%s, new_ws=%s",
-                            window_id, ws,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "[BitBrowser] 窗口主动重启失败，清除缓存待下次重新打开 - id=%s, error=%s",
-                            window_id, e,
-                        )
-                        info.ws_url = None  # 清除缓存，下次 acquire 时 _ensure_window_open 会重新打开
-                        info.task_count = 0  # 重置计数，避免反复尝试
-
-                # 通知等待中的线程有窗口可用了
                 self._window_available.notify()
+
+        # ── 第二段不持主锁：执行 API 调用（耗时操作） ──
+        if need_restart:
+            try:
+                self._close_window_api(window_id)
+                time.sleep(self._restart_delay)  # 等待浏览器进程完全退出（默认5秒）
+                ws = self._open_window_api(window_id)
+                # 重新加锁更新状态并释放窗口
+                with self._window_available:
+                    info.ws_url = ws
+                    info.task_count = 0
+                    info.in_use = False
+                    self._window_available.notify()
+                logger.info(
+                    "[BitBrowser] 窗口主动重启成功 - id=%s, new_ws=%s",
+                    window_id, ws,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[BitBrowser] 窗口主动重启失败，清除缓存待下次重新打开 - id=%s, error=%s",
+                    window_id, e,
+                )
+                with self._window_available:
+                    info.ws_url = None  # 清除缓存，下次 acquire 时 _ensure_window_open 会重新打开
+                    info.task_count = 0  # 重置计数，避免反复尝试
+                    info.in_use = False
+                    self._window_available.notify()
 
     def restart_window(self, window_id: str) -> None:
         """重启指定窗口（关闭后重新打开）"""
@@ -512,62 +550,66 @@ class BitBrowserManager:
         典型本地 API：
         - POST {API_URL}/browser/open  body: {\"id\": window_id}
         - 响应中常见字段：\"ws\", \"wsEndpoint\", \"debuggerAddress\" 等
+
+        注意：通过 _api_lock 串行化，防止多线程同时调用导致 API 502/超时
         """
-        url = self._api_url.rstrip("/") + "/browser/open"
-        logger.debug("[BitBrowser] 打开窗口 API 调用: %s id=%s", url, window_id)
+        with self._api_lock:
+            url = self._api_url.rstrip("/") + "/browser/open"
+            logger.debug("[BitBrowser] 打开窗口 API 调用: %s id=%s", url, window_id)
 
-        resp = requests.post(
-            url,
-            json={"id": window_id},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-
-        # 尝试从常见字段中提取 ws_url
-        ws_url = None
-        # 常见返回结构: {\"data\": {\"ws\": \"ws://...\"}} 或 {\"data\": {\"debuggerAddress\": \"ws://...\"}}
-        candidate = data.get("data") if isinstance(data, dict) else None
-        if isinstance(candidate, dict):
-            ws_url = (
-                candidate.get("ws")
-                or candidate.get("wsEndpoint")
-                or candidate.get("debuggerAddress")
-            )
-        # 备用：直接在顶层查找
-        if not ws_url and isinstance(data, dict):
-            ws_url = (
-                data.get("ws")
-                or data.get("wsEndpoint")
-                or data.get("debuggerAddress")
-            )
-
-        if not ws_url:
-            raise RuntimeError(f"BitBrowser 打开窗口返回中未找到 ws 地址: {data}")
-
-        logger.info("[BitBrowser] 窗口已打开 - id=%s, ws=%s", window_id, ws_url)
-        return ws_url
-
-    def _close_window_api(self, window_id: str) -> None:
-        """调用 BitBrowser API 关闭窗口"""
-        url = self._api_url.rstrip("/") + "/browser/close"
-        logger.debug("[BitBrowser] 关闭窗口 API 调用: %s id=%s", url, window_id)
-
-        try:
             resp = requests.post(
                 url,
                 json={"id": window_id},
-                timeout=10,
+                timeout=30,  # 串行化后单个请求给予更宽裕的超时
             )
-            # 不严格校验返回结果，只记录日志
-            if resp.status_code != 200:
-                logger.warning(
-                    "[BitBrowser] 关闭窗口返回非 200 状态码: %s, body=%s",
-                    resp.status_code,
-                    resp.text[:200],
+            resp.raise_for_status()
+            data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+
+            # 尝试从常见字段中提取 ws_url
+            ws_url = None
+            # 常见返回结构: {\"data\": {\"ws\": \"ws://...\"}} 或 {\"data\": {\"debuggerAddress\": \"ws://...\"}}
+            candidate = data.get("data") if isinstance(data, dict) else None
+            if isinstance(candidate, dict):
+                ws_url = (
+                    candidate.get("ws")
+                    or candidate.get("wsEndpoint")
+                    or candidate.get("debuggerAddress")
                 )
-        except Exception as e:
-            logger.warning("[BitBrowser] 调用关闭窗口接口失败 - id=%s, error=%s", window_id, e)
+            # 备用：直接在顶层查找
+            if not ws_url and isinstance(data, dict):
+                ws_url = (
+                    data.get("ws")
+                    or data.get("wsEndpoint")
+                    or data.get("debuggerAddress")
+                )
+
+            if not ws_url:
+                raise RuntimeError(f"BitBrowser 打开窗口返回中未找到 ws 地址: {data}")
+
+            logger.info("[BitBrowser] 窗口已打开 - id=%s, ws=%s", window_id, ws_url)
+            return ws_url
+
+    def _close_window_api(self, window_id: str) -> None:
+        """调用 BitBrowser API 关闭窗口（通过 _api_lock 串行化）"""
+        with self._api_lock:
+            url = self._api_url.rstrip("/") + "/browser/close"
+            logger.debug("[BitBrowser] 关闭窗口 API 调用: %s id=%s", url, window_id)
+
+            try:
+                resp = requests.post(
+                    url,
+                    json={"id": window_id},
+                    timeout=15,
+                )
+                # 不严格校验返回结果，只记录日志
+                if resp.status_code != 200:
+                    logger.warning(
+                        "[BitBrowser] 关闭窗口返回非 200 状态码: %s, body=%s",
+                        resp.status_code,
+                        resp.text[:200],
+                    )
+            except Exception as e:
+                logger.warning("[BitBrowser] 调用关闭窗口接口失败 - id=%s, error=%s", window_id, e)
 
 
 # 全局单例

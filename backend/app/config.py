@@ -79,6 +79,9 @@ class Config:
     # 每个窗口连续处理多少个任务后主动重启（关闭→重新打开），清空浏览器状态
     # 目的：避免浏览器内存泄漏、Cookie/缓存累积、目标网站行为追踪导致后续任务失败率升高
     BITBROWSER_MAX_TASKS_PER_WINDOW: int = int(os.getenv("BITBROWSER_MAX_TASKS_PER_WINDOW", "5"))
+    # 每个窗口完成一个任务后的冷却时间（秒），降低同一代理IP的请求频率，减少被目标网站限流的概率
+    # 设为 0 表示不冷却（立即可用）
+    BITBROWSER_TASK_COOLDOWN: int = int(os.getenv("BITBROWSER_TASK_COOLDOWN", "10"))
 
     # Crawler configuration
     CRAWLER_DELAY_MIN: int = int(os.getenv("CRAWLER_DELAY_MIN", "1"))
