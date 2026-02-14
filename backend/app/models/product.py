@@ -22,6 +22,8 @@ class FilterPool(Base):
     # 产品主类目页完整URL（用于后续复用类目排名/访问类目页）
     category_url = Column(String, nullable=True)
     price = Column(Float, nullable=True)
+    # 评分（1-5分）
+    rating = Column(Float, nullable=True)
     # 上架日期（如果能从 Istoric Preturi 获取到）
     listed_at = Column(DateTime(timezone=True), nullable=True)
     # 上架日期获取状态：pending / success / not_found / error

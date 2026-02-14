@@ -17,40 +17,101 @@
       <!-- 筛选器 -->
       <el-form :model="filters" label-width="100px" class="filter-form">
         <el-row :gutter="20">
-          <el-col :span="6">
+          <el-col :span="4">
             <el-form-item label="价格区间">
               <el-input-number v-model="filters.price_min" :min="0" :precision="2" placeholder="最低价" style="width: 45%" />
               <span style="margin: 0 5px">-</span>
               <el-input-number v-model="filters.price_max" :min="0" :precision="2" placeholder="最高价" style="width: 45%" />
             </el-form-item>
           </el-col>
-          <el-col :span="6">
+          <el-col :span="4">
             <el-form-item label="评论数">
-              <el-input-number v-model="filters.review_count_min" :min="0" placeholder="最少评论" style="width: 100%" />
+              <el-input-number v-model="filters.review_count_min" :min="0" placeholder="最少评论" style="width: 45%" />
+              <span style="margin: 0 5px">-</span>
+              <el-input-number v-model="filters.review_count_max" :min="0" placeholder="最多评论" style="width: 45%" />
             </el-form-item>
           </el-col>
-          <el-col :span="6">
+          <el-col :span="4">
+            <el-form-item label="评分">
+              <el-input-number v-model="filters.rating_min" :min="0" :max="5" :precision="2" placeholder="最低评分" style="width: 45%" />
+              <span style="margin: 0 5px">-</span>
+              <el-input-number v-model="filters.rating_max" :min="0" :max="5" :precision="2" placeholder="最高评分" style="width: 45%" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="4">
             <el-form-item label="店铺排名">
               <el-input-number v-model="filters.shop_rank_max" :min="1" placeholder="最大排名" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="6">
+          <el-col :span="4">
             <el-form-item label="类目排名">
               <el-input-number v-model="filters.category_rank_max" :min="1" placeholder="最大排名" style="width: 100%" />
             </el-form-item>
           </el-col>
-        </el-row>
-        <el-row :gutter="20">
-          <el-col :span="6">
+          <el-col :span="4">
             <el-form-item label="广告排名">
               <el-input-number v-model="filters.ad_rank_max" :min="1" placeholder="最大排名" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="6">
+        </el-row>
+        <el-row :gutter="20">
+          <el-col :span="4">
             <el-form-item label="库存状态">
               <el-select v-model="filters.stock" placeholder="全部" clearable style="width: 100%">
                 <el-option label="有货" value="in_stock" />
                 <el-option label="缺货" value="out_of_stock" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="4">
+            <el-form-item label="上架日期">
+              <el-select
+                v-model="filters.listed_at_period"
+                placeholder="全部"
+                clearable
+                style="width: 100%"
+              >
+                <el-option label="近半年" value="6months" />
+                <el-option label="近1年" value="1year" />
+                <el-option label="近1.5年" value="1.5years" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="品牌剔除">
+              <el-select
+                v-model="filters.exclude_brands"
+                placeholder="选择要剔除的品牌"
+                multiple
+                filterable
+                clearable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="brand in brands"
+                  :key="brand"
+                  :label="brand"
+                  :value="brand"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="店铺剔除">
+              <el-select
+                v-model="filters.exclude_shops"
+                placeholder="选择要剔除的店铺"
+                multiple
+                filterable
+                clearable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="shop in shops"
+                  :key="shop"
+                  :label="shop"
+                  :value="shop"
+                />
               </el-select>
             </el-form-item>
           </el-col>
@@ -133,6 +194,11 @@
           </template>
         </el-table-column>
         <el-table-column prop="review_count" label="评论数" width="100" />
+        <el-table-column prop="rating" label="评分" width="100">
+          <template #default="{ row }">
+            {{ row.rating !== null && row.rating !== undefined ? row.rating.toFixed(2) : '-' }}
+          </template>
+        </el-table-column>
         <el-table-column label="FBE" width="80">
           <template #default="{ row }">
             <el-tag :type="row.is_fbe ? 'success' : 'info'" size="small">
@@ -177,6 +243,8 @@ const filtering = ref(false)
 const products = ref([])
 const selectedProducts = ref([])
 const selectAll = ref(false)
+const brands = ref([])
+const shops = ref([])
 const page = ref(1)
 const pageSize = ref(100)
 const total = ref(0)
@@ -185,10 +253,16 @@ const filters = reactive({
   price_min: null,
   price_max: null,
   review_count_min: null,
+  review_count_max: null,
+  rating_min: null,
+  rating_max: null,
   shop_rank_max: null,
   category_rank_max: null,
   ad_rank_max: null,
-  stock: null
+  stock: null,
+  listed_at_period: null,
+  exclude_brands: [],
+  exclude_shops: []
 })
 
 // 简单日期格式化（假设后端返回 ISO 字符串）
@@ -247,6 +321,15 @@ const loadProducts = async () => {
     if (filters.review_count_min !== null && filters.review_count_min !== '') {
       params.min_review_count = filters.review_count_min
     }
+    if (filters.review_count_max !== null && filters.review_count_max !== '') {
+      params.max_review_count = filters.review_count_max
+    }
+  if (filters.rating_min !== null && filters.rating_min !== '') {
+    params.min_rating = filters.rating_min
+  }
+  if (filters.rating_max !== null && filters.rating_max !== '') {
+    params.max_rating = filters.rating_max
+  }
     if (filters.shop_rank_max !== null && filters.shop_rank_max !== '') {
       params.max_shop_rank = filters.shop_rank_max
     }
@@ -257,6 +340,18 @@ const loadProducts = async () => {
     if (filters.stock !== null && filters.stock !== '') {
       params.has_stock = filters.stock === 'in_stock'
     }
+    // 上架日期筛选
+    if (filters.listed_at_period) {
+      params.listed_at_period = filters.listed_at_period
+    }
+    // 品牌剔除
+    if (filters.exclude_brands && filters.exclude_brands.length > 0) {
+      params.exclude_brands = filters.exclude_brands
+    }
+    // 店铺剔除
+    if (filters.exclude_shops && filters.exclude_shops.length > 0) {
+      params.exclude_shops = filters.exclude_shops
+    }
     
     
     const response = await filterPoolApi.getProducts(params)
@@ -264,6 +359,20 @@ const loadProducts = async () => {
     
     products.value = response.data || response.items || []
     total.value = response.total || 0
+
+    // 根据当前筛选结果动态生成可用品牌和店铺列表
+    const brandSet = new Set()
+    const shopSet = new Set()
+    products.value.forEach(p => {
+      if (p && p.brand) {
+        brandSet.add(p.brand)
+      }
+      if (p && p.shop_name) {
+        shopSet.add(p.shop_name)
+      }
+    })
+    brands.value = Array.from(brandSet).sort()
+    shops.value = Array.from(shopSet).sort()
     
   } catch (error) {
     ElMessage.error('加载产品列表失败')
@@ -290,6 +399,13 @@ const handleResetFilter = () => {
   Object.keys(filters).forEach(key => {
     filters[key] = null
   })
+  // 重置数组类型和枚举型字段
+  filters.exclude_brands = []
+  filters.exclude_shops = []
+  filters.listed_at_period = null
+  filters.review_count_max = null
+  filters.rating_min = null
+  filters.rating_max = null
   loadProducts()
 }
 
@@ -341,12 +457,20 @@ const handleMoveToMonitor = async () => {
 
 const handleExport = async () => {
   try {
-    const params = { ...filters }
-    Object.keys(params).forEach(key => {
-      if (params[key] === null || params[key] === '') {
-        delete params[key]
-      }
-    })
+    const params = {}
+    if (filters.price_min !== null && filters.price_min !== '') params.min_price = filters.price_min
+    if (filters.price_max !== null && filters.price_max !== '') params.max_price = filters.price_max
+    if (filters.review_count_min !== null && filters.review_count_min !== '') params.min_review_count = filters.review_count_min
+    if (filters.review_count_max !== null && filters.review_count_max !== '') params.max_review_count = filters.review_count_max
+    if (filters.rating_min !== null && filters.rating_min !== '') params.min_rating = filters.rating_min
+    if (filters.rating_max !== null && filters.rating_max !== '') params.max_rating = filters.rating_max
+    if (filters.shop_rank_max !== null && filters.shop_rank_max !== '') params.max_shop_rank = filters.shop_rank_max
+    if (filters.category_rank_max !== null && filters.category_rank_max !== '') params.max_category_rank = filters.category_rank_max
+    if (filters.ad_rank_max !== null && filters.ad_rank_max !== '') params.max_ad_rank = filters.ad_rank_max
+    if (filters.stock !== null && filters.stock !== '') params.has_stock = filters.stock === 'in_stock'
+    if (filters.listed_at_period) params.listed_at_period = filters.listed_at_period
+    if (filters.exclude_brands && filters.exclude_brands.length > 0) params.exclude_brands = filters.exclude_brands
+    if (filters.exclude_shops && filters.exclude_shops.length > 0) params.exclude_shops = filters.exclude_shops
     
     const blob = await filterPoolApi.exportProducts(params)
     const url = window.URL.createObjectURL(blob)

@@ -391,16 +391,65 @@ class BitBrowserManager:
 
     def _ensure_window_open(self, info: BitBrowserWindowInfo) -> Optional[str]:
         """
-        确保窗口已打开并有有效 ws_url
+        确保窗口已打开并有有效 ws_url。
+        会通过 TCP 探活检测缓存的 ws_url 是否可达，不可达则清除缓存并重新打开。
         """
-        # 如果已有 ws_url，直接返回
-        if info.ws_url:
-            return info.ws_url
+        # 如果处于冷却期，跳过
+        if info.cool_down_until and time.time() < info.cool_down_until:
+            return None
 
-        # 否则通过 API 打开
-        ws = self._open_window_api(info.window_id)
-        info.ws_url = ws
-        return ws
+        if info.ws_url:
+            if self._is_ws_alive(info.ws_url):
+                return info.ws_url
+            else:
+                # #region agent log
+                import json as _json_ws, time as _time_ws
+                try:
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_json_ws.dumps({"timestamp": int(_time_ws.time()*1000), "location": "bitbrowser_manager.py:_ensure_window_open:stale_ws", "message": "ws_url不可达，清除缓存并重新打开", "data": {"window_id": info.window_id, "stale_ws_url": info.ws_url}, "hypothesisId": "H3_stale_ws", "runId": "p1p2-fix"}, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+                logger.warning(
+                    "[BitBrowser] ws_url 不可达，重新打开窗口 - id=%s, stale_ws=%s",
+                    info.window_id, info.ws_url,
+                )
+                info.ws_url = None  # 清除陈旧缓存
+
+        # 通过 API 重新打开
+        try:
+            ws = self._open_window_api(info.window_id)
+            info.ws_url = ws
+            # #region agent log
+            import json as _json_ws2, time as _time_ws2
+            try:
+                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                    _f.write(_json_ws2.dumps({"timestamp": int(_time_ws2.time()*1000), "location": "bitbrowser_manager.py:_ensure_window_open:reopened", "message": "窗口重新打开成功", "data": {"window_id": info.window_id, "new_ws_url": ws}, "hypothesisId": "H4_ws_reopen", "runId": "p1p2-fix"}, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
+            return ws
+        except Exception as e:
+            logger.error("[BitBrowser] 打开窗口失败 - id=%s, error=%s", info.window_id, e)
+            return None
+
+    def _is_ws_alive(self, ws_url: str) -> bool:
+        """快速检查 WebSocket 地址是否可达（TCP 探活，超时 2 秒）"""
+        import socket
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(ws_url)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port
+            if not port:
+                return False
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
 
     def _open_window_api(self, window_id: str) -> str:
         """

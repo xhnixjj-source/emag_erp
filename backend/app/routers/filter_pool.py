@@ -1,6 +1,7 @@
 """Filter pool management API"""
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from pydantic import BaseModel
@@ -21,6 +22,7 @@ class FilterPoolResponse(BaseModel):
     brand: Optional[str]  # 品牌
     shop_name: Optional[str]  # 店铺名称
     price: Optional[float]
+    rating: Optional[float]
     listed_at: Optional[str]
     stock: Optional[int]
     review_count: Optional[int]
@@ -42,6 +44,8 @@ class FilterRequest(BaseModel):
     max_price: Optional[float] = None
     min_review_count: Optional[int] = None
     max_review_count: Optional[int] = None
+    min_rating: Optional[float] = None
+    max_rating: Optional[float] = None
     min_shop_rank: Optional[int] = None
     max_shop_rank: Optional[int] = None
     min_category_rank: Optional[int] = None
@@ -79,11 +83,19 @@ async def get_filter_pool(
     max_price: Optional[float] = None,
     min_review_count: Optional[int] = None,
     max_review_count: Optional[int] = None,
+    min_rating: Optional[float] = None,
+    max_rating: Optional[float] = None,
     min_shop_rank: Optional[int] = None,
     max_shop_rank: Optional[int] = None,
     min_category_rank: Optional[int] = None,
     max_category_rank: Optional[int] = None,
     has_stock: Optional[bool] = None,
+    listed_at_period: Optional[str] = None,
+    # 品牌/店铺剔除与链接初筛保持兼容：既支持 exclude_brands=a&exclude_brands=b 也支持 exclude_brands[]=a&exclude_brands[]=b
+    exclude_brands: Optional[List[str]] = Query(None),
+    exclude_brands_brackets: Optional[List[str]] = Query(None, alias="exclude_brands[]"),
+    exclude_shops: Optional[List[str]] = Query(None),
+    exclude_shops_brackets: Optional[List[str]] = Query(None, alias="exclude_shops[]"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db),
     skip: int = 0,
@@ -93,8 +105,14 @@ async def get_filter_pool(
     
     try:
         query = db.query(FilterPool)
+
+        # 兼容 axios 对数组参数使用 exclude_xxx[] 的情况
+        if (not exclude_brands) and exclude_brands_brackets:
+            exclude_brands = exclude_brands_brackets
+        if (not exclude_shops) and exclude_shops_brackets:
+            exclude_shops = exclude_shops_brackets
         
-        # Apply filters
+        # Apply filters（所有条件联动按 AND 过滤）
         if min_price is not None:
             query = query.filter(FilterPool.price >= min_price)
         if max_price is not None:
@@ -103,6 +121,10 @@ async def get_filter_pool(
             query = query.filter(FilterPool.review_count >= min_review_count)
         if max_review_count is not None:
             query = query.filter(FilterPool.review_count <= max_review_count)
+        if min_rating is not None:
+            query = query.filter(FilterPool.rating >= min_rating)
+        if max_rating is not None:
+            query = query.filter(FilterPool.rating <= max_rating)
         if min_shop_rank is not None:
             query = query.filter(FilterPool.shop_rank >= min_shop_rank)
         if max_shop_rank is not None:
@@ -116,6 +138,47 @@ async def get_filter_pool(
                 query = query.filter(FilterPool.stock > 0)
             else:
                 query = query.filter(or_(FilterPool.stock == 0, FilterPool.stock.is_(None)))
+
+        # 上架日期筛选：逻辑与链接初筛保持一致
+        if listed_at_period:
+            now = datetime.utcnow()
+            start_date = None
+            if listed_at_period == "6months":
+                start_date = now - timedelta(days=180)
+            elif listed_at_period == "1year":
+                start_date = now - timedelta(days=365)
+            elif listed_at_period == "1.5years":
+                start_date = now - timedelta(days=547)
+
+            if start_date:
+                # 成功获取且在时间范围内，或已去爬但未获取到（not_found/error），排除 pending
+                query = query.filter(
+                    or_(
+                        and_(
+                            FilterPool.listed_at_status == "success",
+                            FilterPool.listed_at >= start_date,
+                        ),
+                        FilterPool.listed_at_status.in_(["not_found", "error"]),
+                    )
+                )
+
+        # 品牌剔除：逻辑与链接初筛保持一致，保留 brand 为 NULL 的记录
+        if exclude_brands:
+            query = query.filter(
+                or_(
+                    FilterPool.brand.is_(None),
+                    ~FilterPool.brand.in_(exclude_brands),
+                )
+            )
+
+        # 店铺剔除：与品牌剔除逻辑一致，保留 shop_name 为 NULL 的记录
+        if exclude_shops:
+            query = query.filter(
+                or_(
+                    FilterPool.shop_name.is_(None),
+                    ~FilterPool.shop_name.in_(exclude_shops),
+                )
+            )
     
         
         # Get total count
@@ -127,7 +190,6 @@ async def get_filter_pool(
         
         
         # Convert datetime fields to strings for response
-        from datetime import datetime
         converted_products = []
         for product in products:
             product_dict = {
@@ -138,6 +200,7 @@ async def get_filter_pool(
                 "brand": product.brand,
                 "shop_name": product.shop_name,
                 "price": product.price,
+                "rating": product.rating,
                 "stock": product.stock,
                 "review_count": product.review_count,
                 "shop_rank": product.shop_rank,
@@ -206,6 +269,10 @@ async def filter_products(
         query = query.filter(FilterPool.review_count >= filter_data.min_review_count)
     if filter_data.max_review_count is not None:
         query = query.filter(FilterPool.review_count <= filter_data.max_review_count)
+    if filter_data.min_rating is not None:
+        query = query.filter(FilterPool.rating >= filter_data.min_rating)
+    if filter_data.max_rating is not None:
+        query = query.filter(FilterPool.rating <= filter_data.max_rating)
     if filter_data.min_shop_rank is not None:
         query = query.filter(FilterPool.shop_rank >= filter_data.min_shop_rank)
     if filter_data.max_shop_rank is not None:
@@ -339,18 +406,31 @@ async def get_filter_pool_count(
     max_price: Optional[float] = None,
     min_review_count: Optional[int] = None,
     max_review_count: Optional[int] = None,
+    min_rating: Optional[float] = None,
+    max_rating: Optional[float] = None,
     min_shop_rank: Optional[int] = None,
     max_shop_rank: Optional[int] = None,
     min_category_rank: Optional[int] = None,
     max_category_rank: Optional[int] = None,
     has_stock: Optional[bool] = None,
+    listed_at_period: Optional[str] = None,
+    exclude_brands: Optional[List[str]] = Query(None),
+    exclude_brands_brackets: Optional[List[str]] = Query(None, alias="exclude_brands[]"),
+    exclude_shops: Optional[List[str]] = Query(None),
+    exclude_shops_brackets: Optional[List[str]] = Query(None, alias="exclude_shops[]"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
     """Get count of products matching filter criteria"""
     query = db.query(FilterPool)
+
+    # 兼容 axios 对数组参数使用 exclude_xxx[] 的情况
+    if (not exclude_brands) and exclude_brands_brackets:
+        exclude_brands = exclude_brands_brackets
+    if (not exclude_shops) and exclude_shops_brackets:
+        exclude_shops = exclude_shops_brackets
     
-    # Apply filters (same as get_filter_pool)
+    # Apply filters (same as get_filter_pool，保持联动一致)
     if min_price is not None:
         query = query.filter(FilterPool.price >= min_price)
     if max_price is not None:
@@ -359,6 +439,10 @@ async def get_filter_pool_count(
         query = query.filter(FilterPool.review_count >= min_review_count)
     if max_review_count is not None:
         query = query.filter(FilterPool.review_count <= max_review_count)
+    if min_rating is not None:
+        query = query.filter(FilterPool.rating >= min_rating)
+    if max_rating is not None:
+        query = query.filter(FilterPool.rating <= max_rating)
     if min_shop_rank is not None:
         query = query.filter(FilterPool.shop_rank >= min_shop_rank)
     if max_shop_rank is not None:
@@ -372,6 +456,46 @@ async def get_filter_pool_count(
             query = query.filter(FilterPool.stock > 0)
         else:
             query = query.filter(or_(FilterPool.stock == 0, FilterPool.stock.is_(None)))
+
+    # 上架日期筛选
+    if listed_at_period:
+        now = datetime.utcnow()
+        start_date = None
+        if listed_at_period == "6months":
+            start_date = now - timedelta(days=180)
+        elif listed_at_period == "1year":
+            start_date = now - timedelta(days=365)
+        elif listed_at_period == "1.5years":
+            start_date = now - timedelta(days=547)
+
+        if start_date:
+            query = query.filter(
+                or_(
+                    and_(
+                        FilterPool.listed_at_status == "success",
+                        FilterPool.listed_at >= start_date,
+                    ),
+                    FilterPool.listed_at_status.in_(["not_found", "error"]),
+                )
+            )
+
+    # 品牌剔除
+    if exclude_brands:
+        query = query.filter(
+            or_(
+                FilterPool.brand.is_(None),
+                ~FilterPool.brand.in_(exclude_brands),
+            )
+        )
+
+    # 店铺剔除
+    if exclude_shops:
+        query = query.filter(
+            or_(
+                FilterPool.shop_name.is_(None),
+                ~FilterPool.shop_name.in_(exclude_shops),
+            )
+        )
     
     count = query.count()
     return FilterCountResponse(count=count)

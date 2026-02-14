@@ -91,12 +91,25 @@ class RetryManager:
             # Playwright未安装，使用字符串匹配
             pass
         
+        # #region agent log
+        import json as _json_cls, time as _time_cls
+        try:
+            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(_json_cls.dumps({"timestamp": int(_time_cls.time()*1000), "location": "retry_manager.py:classify_error:entry", "message": "错误分类入口", "data": {"error_str_preview": error_str[:200], "error_type_name": error_type}, "hypothesisId": "H1_classify", "runId": "p1p2-fix"}, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+        # #endregion
+
         # Check for timeout errors
         if "timeout" in error_str or "Timeout" in error_type:
             return ErrorType.TIMEOUT
         
-        # Check for connection errors
-        if "connection" in error_str or "Connection" in error_type:
+        # Check for connection errors（含网络层错误和资源不可用）
+        if any(kw in error_str for kw in [
+            "connection", "econnrefused", "err_empty_response",
+            "err_connection", "net::err_", "empty_response",
+            "无法获取可用的", "bitbrowser",
+        ]) or "Connection" in error_type:
             return ErrorType.CONNECTION
         
         # Check for disconnect errors
@@ -107,6 +120,13 @@ class RetryManager:
         if "captcha" in error_str or "verification" in error_str:
             return ErrorType.CAPTCHA
         
+        # #region agent log
+        try:
+            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(_json_cls.dumps({"timestamp": int(_time_cls.time()*1000), "location": "retry_manager.py:classify_error:fallback_other", "message": "错误被分类为OTHER", "data": {"error_str_preview": error_str[:200], "error_type_name": error_type}, "hypothesisId": "H1_classify", "runId": "p1p2-fix"}, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+        # #endregion
         return ErrorType.OTHER
     
     def should_retry(
