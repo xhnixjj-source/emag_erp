@@ -177,6 +177,22 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
+        <el-table-column label="VAT金额(€)" width="120">
+          <template #default="{ row }">
+            <span v-if="row.vat_amount !== null && row.vat_amount !== undefined">
+              {{ row.vat_amount.toFixed(2) }}
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="物流成本(€)" width="120">
+          <template #default="{ row }">
+            <span v-if="row.logistics_cost !== null && row.logistics_cost !== undefined">
+              {{ row.logistics_cost.toFixed(2) }}
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="类目名称" width="150">
           <template #default="{ row }">
             <el-input
@@ -187,7 +203,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="佣金费率(%)" width="130">
+        <el-table-column label="佣金费率(%)" width="150">
           <template #default="{ row }">
             <el-input-number
               v-model="row.platform_commission"
@@ -201,6 +217,28 @@
             />
             <span v-if="row.auto_commission_rate" style="font-size: 10px; color: #999; display: block;">
               自动: {{ row.auto_commission_rate }}%
+            </span>
+            <span v-if="row.commission_source" style="font-size: 10px; color: #409EFF; display: block;">
+              来源: {{ getCommissionSourceText(row.commission_source) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="前端售价(列伊)" width="140">
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.frontend_price_ron"
+              :precision="2"
+              :min="0"
+              size="small"
+              style="width: 100%"
+              placeholder="前端售价"
+              :disabled="!editableRows[row.id]"
+            />
+            <span v-if="row.price_source" style="font-size: 10px; color: #409EFF; display: block;">
+              来源: {{ getPriceSourceText(row.price_source) }}
+            </span>
+            <span v-if="row.best_price_ron" style="font-size: 10px; color: #999; display: block;">
+              参考价: {{ row.best_price_ron.toFixed(2) }} (仅参考)
             </span>
           </template>
         </el-table-column>
@@ -374,6 +412,24 @@ const getStatusText = (status) => {
   return statusMap[status] || status
 }
 
+const getCommissionSourceText = (source) => {
+  const sourceMap = {
+    'crawler': '爬虫',
+    'manual': '人工',
+    'default': '默认',
+    'none': '缺失'
+  }
+  return sourceMap[source] || source
+}
+
+const getPriceSourceText = (source) => {
+  const sourceMap = {
+    'crawler': '爬虫',
+    'manual': '人工'
+  }
+  return sourceMap[source] || source
+}
+
 const loadProfitList = async () => {
   loading.value = true
   try {
@@ -451,7 +507,18 @@ const handleSaveProduct = async (row) => {
       weight: row.weight !== null && row.weight !== undefined ? row.weight : null,
       purchase_price: row.purchase_price !== null && row.purchase_price !== undefined ? row.purchase_price : null,
       category_name: row.category_name || null,
-      platform_commission: row.platform_commission !== null && row.platform_commission !== undefined ? row.platform_commission : null
+      platform_commission: row.platform_commission !== null && row.platform_commission !== undefined ? row.platform_commission : null,
+      frontend_price_ron: row.frontend_price_ron !== null && row.frontend_price_ron !== undefined ? row.frontend_price_ron : null
+    }
+    
+    // 如果前端售价被修改，标记来源为人工
+    if (row.frontend_price_ron && row.price_source !== 'manual') {
+      updateData.price_source = 'manual'
+    }
+    
+    // 如果佣金被修改，标记来源为人工
+    if (row.platform_commission && row.commission_source !== 'manual') {
+      updateData.commission_source = 'manual'
     }
     // #region agent log
     fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProfitCalc.vue:408','message':'Calling updateCalculation API','data':{listing_pool_id:row.listing_pool_id,updateData},timestamp:Date.now(),runId:'initial',hypothesisId:'C'})}).catch(()=>{});

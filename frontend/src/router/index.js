@@ -49,6 +49,12 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/profit-config',
+    name: 'ProfitConfig',
+    component: () => import('@/views/ProfitConfig.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/operation-log',
     name: 'OperationLog',
     component: () => import('@/views/OperationLog.vue'),

@@ -162,6 +162,44 @@ async def add_to_listing(
                     status=ListingStatus.PENDING_CALC
                 )
                 db.add(listing)
+                db.flush()  # 获取 listing.id
+                
+                # 自动反查并创建 ProfitCalculation
+                from app.models.listing import ProfitCalculation
+                from app.services.product_info_service import (
+                    get_product_info_from_listing,
+                    get_commission_from_category
+                )
+                from datetime import datetime
+                
+                # 反查产品信息
+                product_info = get_product_info_from_listing(listing.id, db)
+                
+                # 创建 ProfitCalculation 并填充反查到的信息
+                # 注意：只设置存在的字段，避免SQLAlchemy元数据缓存问题
+                calc = ProfitCalculation()
+                calc.listing_pool_id = listing.id
+                
+                if product_info.get('category_name'):
+                    calc.category_name = product_info.get('category_name')
+                
+                if product_info.get('frontend_price_ron'):
+                    calc.frontend_price_ron = product_info.get('frontend_price_ron')
+                    calc.price_source = 'crawler'
+                    calc.price_last_updated_at = datetime.utcnow()
+                
+                if product_info.get('best_price_ron'):
+                    calc.best_price_ron = product_info.get('best_price_ron')
+                
+                # 如果类目名称存在，尝试自动匹配佣金
+                if calc.category_name:
+                    auto_commission = get_commission_from_category(calc.category_name, db)
+                    if auto_commission:
+                        calc.platform_commission = auto_commission
+                        calc.commission_source = 'default'
+                        calc.commission_last_updated_at = datetime.utcnow()
+                
+                db.add(calc)
                 created_count += 1
             
             # 进入利润测算的产品自动停止监控

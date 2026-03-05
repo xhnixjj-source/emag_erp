@@ -7,6 +7,8 @@ export const profitApi = {
   getFeeSettings: () => api.get('/profit/fee-settings'),
   updateFeeSettings: (settings) => api.put('/profit/fee-settings', settings),
   getProfitList: (params) => api.get('/profit', { params }),
-  rejectProfit: (listingId) => api.put(`/profit/${listingId}/reject`)
+  rejectProfit: (listingId) => api.put(`/profit/${listingId}/reject`),
+  // 增强版利润计算
+  calculateEnhanced: (listingId, data) => api.post(`/profit/${listingId}/calculate-enhanced`, data)
 }
 

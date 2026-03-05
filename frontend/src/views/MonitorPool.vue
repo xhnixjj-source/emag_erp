@@ -6,7 +6,7 @@
           <span>监控池</span>
           <div>
             <el-button type="success" @click="handleMoveToProfit" :loading="movingToProfit" :disabled="selectedProducts.length === 0">
-              进入利润测算
+              加入产品库
             </el-button>
             <el-button type="primary" @click="handleTriggerMonitor" :loading="triggering">
               手动触发监控
@@ -346,14 +346,14 @@ const handleSelectionChange = (selection) => {
 
 const handleMoveToProfit = async () => {
   if (selectedProducts.value.length === 0) {
-    ElMessage.warning('请选择要进入利润测算的产品')
+    ElMessage.warning('请选择要加入产品库的产品')
     return
   }
   
   
   try {
     await ElMessageBox.confirm(
-      `确定要将 ${selectedProducts.value.length} 个产品添加到利润测算吗？`,
+      `确定要将 ${selectedProducts.value.length} 个产品加入产品库吗？`,
       '确认操作',
       {
         confirmButtonText: '确定',
@@ -372,19 +372,19 @@ const handleMoveToProfit = async () => {
     
     // 即使 created_count 为 0（产品已存在），也继续流程
     if (response?.created_count === 0) {
-      ElMessage.warning('所选产品已存在于利润测算中')
+      ElMessage.warning('所选产品已存在于产品库中')
     } else {
-      ElMessage.success(`成功添加 ${response?.created_count || 0} 个产品到利润测算`)
+      ElMessage.success(`成功添加 ${response?.created_count || 0} 个产品到产品库`)
     }
     
     selectedProducts.value = []
     await loadProducts()
     
-    // 跳转到利润测算页面
-    router.push('/profit')
+    // 不进行跳转，只提示成功
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('添加到利润测算失败')
+      console.error('添加到产品库失败:', error)
+      ElMessage.error('加入产品库失败: ' + (error.response?.data?.detail || error.message || '未知错误'))
     }
   } finally {
     movingToProfit.value = false

@@ -181,7 +181,7 @@
         </el-table-column>
         <el-table-column label="关键字" width="150">
           <template #default="{ row }">
-            {{ getKeywordName(row.keyword_id) }}
+            {{ row.keyword_name || getKeywordName(row.keyword_id) || '-' }}
           </template>
         </el-table-column>
         <el-table-column prop="pnk_code" label="PNK" width="130" show-overflow-tooltip />

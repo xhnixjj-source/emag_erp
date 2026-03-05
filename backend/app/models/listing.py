@@ -59,8 +59,24 @@ class ProfitCalculation(Base):
     category_name = Column(String, nullable=True)  # 类目名称
     calculated_at = Column(DateTime(timezone=True), server_default=func.now())
     
+    # 佣金相关
+    commission_source = Column(String, nullable=True)  # 'crawler' / 'manual' / 'default' / 'none'
+    commission_last_updated_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # 价格相关
+    frontend_price_ron = Column(Float, nullable=True)  # 前端售价（列伊），从 FilterPool.price 反查
+    price_source = Column(String, nullable=True)  # 'crawler' / 'manual'
+    price_last_updated_at = Column(DateTime(timezone=True), nullable=True)
+    best_price_ron = Column(Float, nullable=True)  # best price（列伊），从其他表反查，仅参考
+    
+    # 包材与运输
+    packaging_template_id = Column(Integer, ForeignKey("packaging_template.id"), nullable=True)
+    default_transport_mode = Column(String, nullable=True)  # 'air' / 'land'
+    is_genius_eligible = Column(Boolean, default=False, nullable=False)
+    
     # Relationships
     listing_pool = relationship("ListingPool", back_populates="profit_calc")
+    packaging_template = relationship("PackagingTemplate", foreign_keys=[packaging_template_id])
 
 
 class ListingDetails(Base):

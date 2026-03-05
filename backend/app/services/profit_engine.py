@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, getcontext
-from typing import Optional
+from typing import Optional, List
 
 # Set a reasonable precision for financial calculations
 getcontext().prec = 28
@@ -19,6 +19,25 @@ class ProfitResult:
     vat_amount: Decimal
     commission_amount: Decimal
     break_even_price: Optional[Decimal]  # sale price (VAT included) needed for net_profit = 0
+
+
+@dataclass
+class EnhancedProfitResult:
+    """Enhanced profit calculation result with all cost items and two margin types"""
+    revenue_ex_vat_rmb: Decimal      # 不含VAT销售额（人民币）
+    revenue_inc_vat_rmb: Decimal     # 含VAT销售额（人民币）
+    volumetric_weight_kg: Decimal    # 体积重（公斤）
+    chargeable_weight_kg: Decimal     # 计费重（公斤）
+    first_leg_logistics_cost_rmb: Decimal  # 头程物流费（人民币）
+    commission_fee_ron: Decimal      # 平台佣金（列伊）
+    commission_fee_rmb: Decimal      # 平台佣金（人民币）
+    genius_fee_ron: Decimal          # Genius费用（列伊）
+    genius_fee_rmb: Decimal          # Genius费用（人民币）
+    order_handling_fee_rmb: Decimal   # 订单处理费（人民币）
+    storage_fee_rmb: Decimal         # 仓储费（人民币）
+    profit_rmb: Decimal              # 利润（人民币）
+    margin_ex_vat: Decimal           # 利润率（去除VAT）
+    margin_inc_vat: Decimal          # 利润率（含VAT）
 
 
 @dataclass
@@ -42,6 +61,37 @@ class ProfitDecisionResult:
     """Profit calculation result with product status"""
     profit: ProfitResult
     product_status: str  # "profitable", "risky", "break_even", "not_viable"
+
+
+class GeniusRuleDomain:
+    """Genius 费用规则领域对象"""
+    def __init__(self, steps: List):
+        """
+        Args:
+            steps: GeniusRuleStep 对象列表，每个step包含 min_sales_amount, max_sales_amount, fee_amount
+        """
+        # 按最小销售额排序
+        self.steps = sorted(steps, key=lambda x: x.min_sales_amount)
+    
+    def calc_fee(self, sales_amount_ron: Decimal) -> Decimal:
+        """
+        根据销售额计算 genius 费用
+        
+        Args:
+            sales_amount_ron: 销售额（列伊）
+        
+        Returns:
+            genius费用（列伊）
+        """
+        for step in self.steps:
+            if sales_amount_ron >= Decimal(str(step.min_sales_amount)):
+                if step.max_sales_amount is None:
+                    # 无上限，直接返回
+                    return Decimal(str(step.fee_amount))
+                elif sales_amount_ron < Decimal(str(step.max_sales_amount)):
+                    # 在区间内
+                    return Decimal(str(step.fee_amount))
+        return Decimal("0")
 
 
 class ProfitEngine:
@@ -287,6 +337,104 @@ class ProfitEngine:
             storage_fee=storage_fee,
             vat_rate=vat_rate,
             commission_rate=commission_rate,
+        )
+    
+    @staticmethod
+    def calculate_profit_enhanced(
+        sale_price_gross_ron: Decimal,  # 前端售价（列伊，含VAT）
+        purchase_price_rmb: Decimal,  # 采购价（人民币）
+        weight_kg: Decimal,
+        length_cm: Decimal,
+        width_cm: Decimal,
+        height_cm: Decimal,
+        vat_rate: Decimal,  # 小数格式，如 0.21
+        commission_rate: Decimal,  # 小数格式，如 0.15
+        exchange_rate: Decimal,  # 1 RON = exchange_rate CNY
+        logistics_price_per_kg_rmb: Decimal,  # 物流单价（人民币/公斤）
+        packaging_cost_rmb: Decimal,  # 包材成本（人民币）
+        participate_genius: bool,
+        genius_rule: Optional[GeniusRuleDomain],
+        order_handling_fee_rmb: Decimal,
+        storage_fee_rmb: Decimal,
+    ) -> EnhancedProfitResult:
+        """
+        增强版利润计算，支持所有成本项和两种利润率
+        
+        Args:
+            sale_price_gross_ron: 前端售价（列伊，含VAT）
+            purchase_price_rmb: 采购价（人民币）
+            weight_kg: 重量（公斤）
+            length_cm, width_cm, height_cm: 尺寸（厘米）
+            vat_rate: VAT率（小数格式，如 0.21）
+            commission_rate: 佣金率（小数格式，如 0.15）
+            exchange_rate: 汇率（1 RON = exchange_rate CNY）
+            logistics_price_per_kg_rmb: 物流单价（人民币/公斤）
+            packaging_cost_rmb: 包材成本（人民币）
+            participate_genius: 是否参与genius
+            genius_rule: Genius规则对象
+            order_handling_fee_rmb: 订单处理费（人民币）
+            storage_fee_rmb: 仓储费（人民币）
+        
+        Returns:
+            EnhancedProfitResult: 包含所有中间项和最终结果
+        """
+        one = Decimal("1")
+        
+        # 收入计算
+        revenue_inc_vat_rmb = sale_price_gross_ron * exchange_rate
+        revenue_ex_vat_rmb = sale_price_gross_ron * (one - vat_rate) * exchange_rate
+        
+        # 体积重和计费重
+        # 体积重 = (长 * 宽 * 高) / 6000，单位：公斤
+        # 公式说明：如果尺寸单位是cm，体积重 = (L*W*H) / 6000，结果单位是kg
+        # 例如：30cm * 20cm * 10cm = 6000 cm³，6000 / 6000 = 1 kg
+        volumetric_weight_kg = (length_cm * width_cm * height_cm) / Decimal("6000")
+        chargeable_weight_kg = max(volumetric_weight_kg, weight_kg)
+        
+        # 头程物流费
+        first_leg_logistics_cost_rmb = chargeable_weight_kg * logistics_price_per_kg_rmb
+        
+        # 平台佣金
+        commission_fee_ron = sale_price_gross_ron * commission_rate
+        commission_fee_rmb = commission_fee_ron * exchange_rate
+        
+        # Genius 费用
+        genius_fee_ron = Decimal("0")
+        if participate_genius and genius_rule:
+            genius_fee_ron = genius_rule.calc_fee(sale_price_gross_ron)
+        genius_fee_rmb = genius_fee_ron * exchange_rate
+        
+        # 利润
+        profit_rmb = (
+            revenue_ex_vat_rmb
+            - commission_fee_rmb
+            - purchase_price_rmb
+            - packaging_cost_rmb
+            - first_leg_logistics_cost_rmb
+            - genius_fee_rmb
+            - order_handling_fee_rmb
+            - storage_fee_rmb
+        )
+        
+        # 两种利润率
+        margin_ex_vat = profit_rmb / revenue_ex_vat_rmb if revenue_ex_vat_rmb > 0 else Decimal("0")
+        margin_inc_vat = profit_rmb / revenue_inc_vat_rmb if revenue_inc_vat_rmb > 0 else Decimal("0")
+        
+        return EnhancedProfitResult(
+            revenue_ex_vat_rmb=revenue_ex_vat_rmb,
+            revenue_inc_vat_rmb=revenue_inc_vat_rmb,
+            volumetric_weight_kg=volumetric_weight_kg,
+            chargeable_weight_kg=chargeable_weight_kg,
+            first_leg_logistics_cost_rmb=first_leg_logistics_cost_rmb,
+            commission_fee_ron=commission_fee_ron,
+            commission_fee_rmb=commission_fee_rmb,
+            genius_fee_ron=genius_fee_ron,
+            genius_fee_rmb=genius_fee_rmb,
+            order_handling_fee_rmb=order_handling_fee_rmb,
+            storage_fee_rmb=storage_fee_rmb,
+            profit_rmb=profit_rmb,
+            margin_ex_vat=margin_ex_vat,
+            margin_inc_vat=margin_inc_vat,
         )
 
 

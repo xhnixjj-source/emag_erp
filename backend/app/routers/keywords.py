@@ -536,6 +536,12 @@ async def get_keyword_links(
                         except Exception:
                             return None
                     
+                    # 补充 keyword_name 字段，避免前端依赖“当前登录用户的关键字列表”做二次映射
+                    try:
+                        keyword_name = link.keyword.keyword if getattr(link, "keyword", None) else None
+                    except Exception:
+                        keyword_name = None
+
                     link_dict = {
                         "id": link.id,
                         "keyword_id": link.keyword_id,
@@ -558,7 +564,8 @@ async def get_keyword_links(
                         "source": link.source,
                         "listed_at": safe_isoformat(link.listed_at),
                         "listed_at_status": link.listed_at_status,
-                        "listed_at_error_type": link.listed_at_error_type
+                        "listed_at_error_type": link.listed_at_error_type,
+                        "keyword_name": keyword_name,
                     }
                     serialized_links.append(link_dict)
                 except Exception as link_err:

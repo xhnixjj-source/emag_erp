@@ -16,7 +16,18 @@ from app.models.user import User
 from app.models.profit_config import ProfitConfig
 from app.services.permission import require_product_edit_permission
 from app.services.operation_log_service import create_operation_log
-from app.services.profit_engine import ProfitEngine
+from app.services.profit_engine import ProfitEngine, GeniusRuleDomain
+from app.services.config_service import (
+    get_current_vat,
+    get_current_exchange_rate,
+    get_logistics_price,
+    get_active_genius_rule,
+    get_packaging_cost
+)
+from app.services.product_info_service import (
+    get_product_info_from_listing,
+    populate_profit_calculation_from_listing
+)
 from decimal import Decimal
 
 
@@ -38,6 +49,13 @@ class ProfitCalculationRequest(BaseModel):
     chinese_name: Optional[str] = None
     model_number: Optional[str] = None
     category_name: Optional[str] = None
+    # 新增字段
+    frontend_price_ron: Optional[float] = None
+    transport_mode: Optional[str] = None  # 'air' / 'land'
+    participate_genius: Optional[bool] = False
+    packaging_template_id: Optional[int] = None
+    override_vat: Optional[float] = None
+    override_exchange_rate: Optional[float] = None
 
     model_config = {"protected_namespaces": ()}
 
@@ -63,8 +81,47 @@ class ProfitCalculationResponse(BaseModel):
     model_number: Optional[str] = None
     category_name: Optional[str] = None
     calculated_at: Optional[str] = None
+    # 新增字段
+    commission_source: Optional[str] = None
+    commission_last_updated_at: Optional[str] = None
+    frontend_price_ron: Optional[float] = None
+    price_source: Optional[str] = None
+    price_last_updated_at: Optional[str] = None
+    best_price_ron: Optional[float] = None
+    packaging_template_id: Optional[int] = None
+    default_transport_mode: Optional[str] = None
+    is_genius_eligible: Optional[bool] = False
 
     model_config = {"protected_namespaces": (), "from_attributes": True}
+
+
+class EnhancedProfitCalculationResponse(BaseModel):
+    """Enhanced profit calculation response with all cost items"""
+    # 基础信息
+    listing_pool_id: int
+    frontend_price_ron: float
+    purchase_price_rmb: float
+    
+    # 收入
+    revenue_ex_vat_rmb: float
+    revenue_inc_vat_rmb: float
+    
+    # 成本项明细
+    volumetric_weight_kg: float
+    chargeable_weight_kg: float
+    first_leg_logistics_cost_rmb: float
+    commission_fee_ron: float
+    commission_fee_rmb: float
+    genius_fee_ron: float
+    genius_fee_rmb: float
+    order_handling_fee_rmb: float
+    storage_fee_rmb: float
+    packaging_cost_rmb: float
+    
+    # 结果
+    profit_rmb: float
+    margin_ex_vat: float  # 利润率（去除VAT）
+    margin_inc_vat: float  # 利润率（含VAT）
 
 
 
@@ -345,22 +402,53 @@ async def get_profit_list(
     for listing in listings:
         calc = listing.profit_calc
         
-        # If no profit calculation exists, create a placeholder with listing_pool_id
-        # This allows displaying listings that haven't been calculated yet
+        # If no profit calculation exists, create one with auto-populated data
         if not calc:
+            from app.services.product_info_service import (
+                get_product_info_from_listing,
+                get_commission_from_category
+            )
+            from datetime import datetime
             
-            # Create a placeholder ProfitCalculation object for display
-            # We'll use listing.id as a temporary id, but the actual calc_id will be None
-            # Note: We need to handle this in the response model
-            pass  # We'll handle this case by creating a minimal response item
+            # 反查产品信息
+            product_info = get_product_info_from_listing(listing.id, db)
+            
+            # 创建 ProfitCalculation 并填充反查到的信息
+            calc = ProfitCalculation(
+                listing_pool_id=listing.id,
+                category_name=product_info.get('category_name'),
+                frontend_price_ron=product_info.get('frontend_price_ron'),
+                best_price_ron=product_info.get('best_price_ron'),
+            )
+            
+            # 设置价格来源
+            if product_info.get('frontend_price_ron'):
+                calc.price_source = 'crawler'
+                calc.price_last_updated_at = datetime.utcnow()
+            
+            # 如果类目名称存在，尝试自动匹配佣金
+            if calc.category_name:
+                auto_commission = get_commission_from_category(calc.category_name, db)
+                if auto_commission:
+                    calc.platform_commission = auto_commission
+                    calc.commission_source = 'default'
+                    calc.commission_last_updated_at = datetime.utcnow()
+            
+            db.add(calc)
+            db.flush()
+        
+        # 如果已有 ProfitCalculation，但某些字段缺失，尝试自动填充
+        else:
+            from app.services.product_info_service import populate_profit_calculation_from_listing
+            populate_profit_calculation_from_listing(calc, listing, db, force_update=False)
         
         # Get product info via monitor pool
         competitor_image = None
         product_name_ro = None
         price = None
         
-        
-        
+        # 优先使用 frontend_price_ron（前端售价），如果没有则从 FilterPool 获取
+        # 但图片和名称始终从 FilterPool 获取
         if listing.monitor_pool_id:
             monitor = db.query(MonitorPool).filter(MonitorPool.id == listing.monitor_pool_id).first()
             
@@ -370,17 +458,31 @@ async def get_profit_list(
                 if filter_product:
                     competitor_image = filter_product.thumbnail_image
                     product_name_ro = filter_product.product_name
-                    price = filter_product.price
+                    # 价格优先使用 frontend_price_ron，如果没有则使用 FilterPool 的价格
+                    if calc and calc.frontend_price_ron:
+                        price = calc.frontend_price_ron
+                    else:
+                        price = filter_product.price
+        elif calc and calc.frontend_price_ron:
+            # 如果没有 monitor_pool_id，但有 frontend_price_ron，使用它作为价格
+            price = calc.frontend_price_ron
         
         # Calculate derived fields using ProfitEngine if we have all required data
         profit_margin_without_vat = None
+        profit_margin_calc = None
         platform_commission_amount = None
         vat_amount_calc = None
         logistics_cost_calc = None
         roi_calc = None
+        profit_amount_calc = None
         
         # Use ProfitEngine to calculate detailed metrics if we have all required data
-        if calc and price and calc.purchase_price is not None:
+        # 注意：price 可能是 None，需要检查 frontend_price_ron
+        sale_price_for_calc = price
+        if not sale_price_for_calc and calc and calc.frontend_price_ron:
+            sale_price_for_calc = calc.frontend_price_ron
+        
+        if calc and sale_price_for_calc and calc.purchase_price is not None:
             try:
                 config = get_or_create_profit_config(db)
                 
@@ -402,7 +504,7 @@ async def get_profit_list(
                 
                 # Calculate using ProfitEngine
                 result = ProfitEngine.calculate_profit(
-                    sale_price_gross=Decimal(str(price)),
+                    sale_price_gross=Decimal(str(sale_price_for_calc)),
                     purchase_cost=Decimal(str(calc.purchase_price)),
                     weight_kg=weight_kg,
                     length_cm=length_cm,
@@ -421,20 +523,38 @@ async def get_profit_list(
                 vat_amount_calc = float(result.vat_amount)
                 logistics_cost_calc = float(result.logistics_cost)
                 roi_calc = float(result.roi * 100)  # Convert to percentage
+                profit_amount_calc = float(result.net_profit)
+                
+                # Calculate profit margin (with VAT) - percentage format
+                profit_margin_calc = float(result.profit_margin * 100)  # Convert to percentage
                 
                 # Calculate profit margin without VAT
-                price_without_vat = Decimal(str(price)) - result.vat_amount
+                price_without_vat = Decimal(str(sale_price_for_calc)) - result.vat_amount
                 if price_without_vat > 0:
                     profit_margin_without_vat = float(result.net_profit / price_without_vat * 100)
+                
+                # Update database with calculated values
+                calc.profit_amount = profit_amount_calc
+                calc.profit_margin = profit_margin_calc
+                db.flush()
             except Exception as e:
+                # Log the error for debugging
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Profit calculation failed for listing {listing.id}: {str(e)}", exc_info=True)
+                
                 # Fallback to simple calculation if ProfitEngine fails
-                if calc.platform_commission is not None and price:
-                    platform_commission_amount = price * (calc.platform_commission / 100)
+                if calc.platform_commission is not None and sale_price_for_calc:
+                    platform_commission_amount = sale_price_for_calc * (calc.platform_commission / 100)
                     if calc.vat is not None:
-                        vat_amount_calc = price * (calc.vat / 100)
-                        price_without_vat = price - vat_amount_calc
+                        vat_amount_calc = sale_price_for_calc * (calc.vat / 100)
+                        price_without_vat = sale_price_for_calc - vat_amount_calc
                         if price_without_vat > 0 and calc.profit_amount is not None:
                             profit_margin_without_vat = (calc.profit_amount / price_without_vat * 100)
+                
+                # Fallback logistics cost calculation
+                if calc.shipping_cost is not None:
+                    logistics_cost_calc = calc.shipping_cost
         
         # 尝试自动获取佣金费率
         auto_commission_rate = None
@@ -494,17 +614,17 @@ async def get_profit_list(
                 height=calc.height,
                 weight=calc.weight,
                 purchase_price=calc.purchase_price,
-                sale_price=price,
-                profit_amount=calc.profit_amount,
-                profit_margin=calc.profit_margin,
+                sale_price=sale_price_for_calc if sale_price_for_calc else price,
+                profit_amount=profit_amount_calc if profit_amount_calc is not None else calc.profit_amount,
+                profit_margin=profit_margin_calc if profit_margin_calc is not None else calc.profit_margin,
                 profit_margin_without_vat=profit_margin_without_vat,
                 roi=roi_calc,
                 category_name=calc.category_name,
                 platform_commission=calc.platform_commission,
                 auto_commission_rate=auto_commission_rate,
-                platform_commission_amount=platform_commission_amount,
-                vat_amount=vat_amount_calc,
-                logistics_cost=logistics_cost_calc,
+                platform_commission_amount=platform_commission_amount if platform_commission_amount is not None else None,
+                vat_amount=vat_amount_calc if vat_amount_calc is not None else None,
+                logistics_cost=logistics_cost_calc if logistics_cost_calc is not None else None,
                 domestic_logistics=calc.shipping_cost,
                 shipping_cost=calc.shipping_cost,
                 status=listing.status.value if hasattr(listing.status, 'value') else str(listing.status),
@@ -552,6 +672,160 @@ async def update_fee_settings(
         platform_commission=config.default_platform_commission,
         vat=config.default_vat_rate
     )
+
+@router.post("/{listing_id}/calculate-enhanced", response_model=EnhancedProfitCalculationResponse)
+async def calculate_profit_enhanced(
+    listing_id: int,
+    request: ProfitCalculationRequest,
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    增强版利润计算，支持所有成本项和两种利润率
+    """
+    
+    # 获取 listing
+    listing = db.query(ListingPool).filter(ListingPool.id == listing_id).first()
+    if not listing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Listing not found"
+        )
+    
+    # 获取或创建 ProfitCalculation
+    calc = db.query(ProfitCalculation).filter(
+        ProfitCalculation.listing_pool_id == listing_id
+    ).first()
+    
+    if not calc:
+        calc = ProfitCalculation(listing_pool_id=listing_id)
+        db.add(calc)
+        db.flush()
+    
+    # 自动填充缺失字段
+    populate_profit_calculation_from_listing(calc, listing, db, force_update=False)
+    
+    # 更新字段（如果请求中提供了）
+    if request.purchase_price is not None:
+        calc.purchase_price = request.purchase_price
+    if request.length is not None:
+        calc.length = request.length
+    if request.width is not None:
+        calc.width = request.width
+    if request.height is not None:
+        calc.height = request.height
+    if request.weight is not None:
+        calc.weight = request.weight
+    if request.frontend_price_ron is not None:
+        calc.frontend_price_ron = request.frontend_price_ron
+        calc.price_source = 'manual'
+        calc.price_last_updated_at = datetime.utcnow()
+    if request.transport_mode is not None:
+        calc.default_transport_mode = request.transport_mode
+    if request.participate_genius is not None:
+        calc.is_genius_eligible = request.participate_genius
+    if request.packaging_template_id is not None:
+        calc.packaging_template_id = request.packaging_template_id
+    
+    db.commit()
+    db.refresh(calc)
+    
+    # 获取配置
+    vat_rate = Decimal(str(request.override_vat)) if request.override_vat else get_current_vat(db=db)
+    exchange_rate = Decimal(str(request.override_exchange_rate)) if request.override_exchange_rate else get_current_exchange_rate(db=db)
+    transport_mode = calc.default_transport_mode or request.transport_mode or 'air'
+    logistics_price_per_kg_rmb = get_logistics_price(transport_mode, db=db)
+    
+    # 获取佣金费率
+    commission_rate = Decimal("0")
+    if calc.platform_commission is not None:
+        commission_rate = Decimal(str(calc.platform_commission / 100))
+    elif calc.category_name:
+        auto_commission = get_commission_from_category(calc.category_name, db)
+        if auto_commission:
+            commission_rate = Decimal(str(auto_commission / 100))
+    
+    # 获取包材成本
+    packaging_cost_rmb = get_packaging_cost(calc.packaging_template_id, db=db)
+    
+    # 获取 genius 规则
+    genius_rule_data = get_active_genius_rule(db=db)
+    genius_rule = None
+    if genius_rule_data and genius_rule_data.get('steps'):
+        genius_rule = GeniusRuleDomain(genius_rule_data['steps'])
+    
+    # 获取前端售价
+    frontend_price_ron = Decimal(str(calc.frontend_price_ron)) if calc.frontend_price_ron else Decimal("0")
+    if frontend_price_ron == 0:
+        # 如果前端售价为空，尝试从 FilterPool 反查
+        product_info = get_product_info_from_listing(listing_id, db)
+        if product_info.get('frontend_price_ron'):
+            frontend_price_ron = Decimal(str(product_info['frontend_price_ron']))
+    
+    if frontend_price_ron == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Frontend price is required"
+        )
+    
+    # 获取采购价
+    purchase_price_rmb = Decimal(str(calc.purchase_price)) if calc.purchase_price else Decimal("0")
+    if purchase_price_rmb == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Purchase price is required"
+        )
+    
+    # 获取尺寸和重量
+    weight_kg = Decimal(str(calc.weight)) if calc.weight else Decimal("0")
+    length_cm = Decimal(str(calc.length)) if calc.length else Decimal("0")
+    width_cm = Decimal(str(calc.width)) if calc.width else Decimal("0")
+    height_cm = Decimal(str(calc.height)) if calc.height else Decimal("0")
+    
+    # 获取订单处理费和仓储费（暂时使用 calc 中的值，后续可以扩展为模板）
+    order_handling_fee_rmb = Decimal(str(calc.order_fee)) if calc.order_fee else Decimal("0")
+    storage_fee_rmb = Decimal(str(calc.storage_fee)) if calc.storage_fee else Decimal("0")
+    
+    # 调用增强版利润计算
+    result = ProfitEngine.calculate_profit_enhanced(
+        sale_price_gross_ron=frontend_price_ron,
+        purchase_price_rmb=purchase_price_rmb,
+        weight_kg=weight_kg,
+        length_cm=length_cm,
+        width_cm=width_cm,
+        height_cm=height_cm,
+        vat_rate=vat_rate,
+        commission_rate=commission_rate,
+        exchange_rate=exchange_rate,
+        logistics_price_per_kg_rmb=logistics_price_per_kg_rmb,
+        packaging_cost_rmb=packaging_cost_rmb,
+        participate_genius=calc.is_genius_eligible or False,
+        genius_rule=genius_rule,
+        order_handling_fee_rmb=order_handling_fee_rmb,
+        storage_fee_rmb=storage_fee_rmb,
+    )
+    
+    return EnhancedProfitCalculationResponse(
+        listing_pool_id=listing_id,
+        frontend_price_ron=float(frontend_price_ron),
+        purchase_price_rmb=float(purchase_price_rmb),
+        revenue_ex_vat_rmb=float(result.revenue_ex_vat_rmb),
+        revenue_inc_vat_rmb=float(result.revenue_inc_vat_rmb),
+        volumetric_weight_kg=float(result.volumetric_weight_kg),
+        chargeable_weight_kg=float(result.chargeable_weight_kg),
+        first_leg_logistics_cost_rmb=float(result.first_leg_logistics_cost_rmb),
+        commission_fee_ron=float(result.commission_fee_ron),
+        commission_fee_rmb=float(result.commission_fee_rmb),
+        genius_fee_ron=float(result.genius_fee_ron),
+        genius_fee_rmb=float(result.genius_fee_rmb),
+        order_handling_fee_rmb=float(result.order_handling_fee_rmb),
+        storage_fee_rmb=float(result.storage_fee_rmb),
+        packaging_cost_rmb=float(packaging_cost_rmb),
+        profit_rmb=float(result.profit_rmb),
+        margin_ex_vat=float(result.margin_ex_vat),
+        margin_inc_vat=float(result.margin_inc_vat),
+    )
+
 
 @router.get("/{listing_id}", response_model=ProfitCalculationResponse)
 async def get_profit_calculation(

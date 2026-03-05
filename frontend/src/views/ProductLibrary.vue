@@ -339,10 +339,8 @@ const handleSaveProduct = async (row) => {
 }
 
 const goToProfitCalculation = (row) => {
-  router.push({
-    path: '/profit-calculation',
-    query: { listingId: row.listing_pool_id }
-  })
+  // 不进行跳转，只提示用户可以在利润测算页面查看
+  ElMessage.info('产品已加入产品库，请在"利润测算"页面查看和编辑')
 }
 
 onMounted(async () => {
