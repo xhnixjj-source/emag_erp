@@ -235,7 +235,7 @@ async def list_keywords(
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db),
     skip: int = 0,
-    limit: int = 100
+    limit: int = 5000
 ):
     """List keywords"""
     keywords = db.query(Keyword).filter(
