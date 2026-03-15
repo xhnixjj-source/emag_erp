@@ -1,0 +1,24 @@
+{
+    "code": 200,
+    "message": "OK",
+    "data": [
+        {
+            "vendorProductId": 8901588961832,
+            "transferredToStorageQuantity": 4,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961832,
+            "transferredToStorageQuantity": 6,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588962266,
+            "transferredToStorageQuantity": 4,
+            "expirationDate": null,
+            "producerLot": null
+        }
+    ]
+}

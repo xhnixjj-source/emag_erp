@@ -1,0 +1,78 @@
+{
+    "code": 200,
+    "message": "OK",
+    "data": [
+        {
+            "vendorProductId": 8901588961627,
+            "transferredToStorageQuantity": 3,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961627,
+            "transferredToStorageQuantity": 7,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588962006,
+            "transferredToStorageQuantity": 5,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588962143,
+            "transferredToStorageQuantity": 10,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588962013,
+            "transferredToStorageQuantity": 5,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588962150,
+            "transferredToStorageQuantity": 12,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588962167,
+            "transferredToStorageQuantity": 13,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588962181,
+            "transferredToStorageQuantity": 9,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588962174,
+            "transferredToStorageQuantity": 10,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961764,
+            "transferredToStorageQuantity": 5,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961641,
+            "transferredToStorageQuantity": 6,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961641,
+            "transferredToStorageQuantity": 6,
+            "expirationDate": null,
+            "producerLot": null
+        }
+    ]
+}

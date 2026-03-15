@@ -1,0 +1,54 @@
+{
+    "code": 200,
+    "message": "OK",
+    "data": [
+        {
+            "vendorProductId": 8901588961832,
+            "transferredToStorageQuantity": 8,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961832,
+            "transferredToStorageQuantity": 4,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961832,
+            "transferredToStorageQuantity": 4,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961832,
+            "transferredToStorageQuantity": 8,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961832,
+            "transferredToStorageQuantity": 9,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961832,
+            "transferredToStorageQuantity": 3,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961832,
+            "transferredToStorageQuantity": 2,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961832,
+            "transferredToStorageQuantity": 10,
+            "expirationDate": null,
+            "producerLot": null
+        }
+    ]
+}

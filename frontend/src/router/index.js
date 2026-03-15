@@ -71,6 +71,18 @@ const routes = [
     name: 'FailedTasks',
     component: () => import('@/views/FailedTasks.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/emag-sync',
+    name: 'EmagSync',
+    component: () => import('@/views/EmagSync.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/reports',
+    name: 'Reports',
+    component: () => import('@/views/Reports.vue'),
+    meta: { requiresAuth: true }
   }
 ]
 

@@ -60,7 +60,7 @@ def setup_logging():
 # 初始化日志系统
 setup_logging()
 
-from app.routers import auth, keywords, filter_pool, monitor, listing, profit, profit_config, operation_log, failed_tasks
+from app.routers import auth, keywords, filter_pool, monitor, listing, profit, profit_config, operation_log, failed_tasks, emag_sync, emag_marketplace, reports
 from app.middleware.operation_log_middleware import OperationLogMiddleware
 from app.services.scheduler import start_scheduler
 
@@ -69,58 +69,6 @@ app = FastAPI(
     description="EMAG选品上架管理系统",
     version="1.0.0"
 )
-
-# #region agent log - request logging middleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-class RequestLogMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        # #region agent log
-        try:
-            import json as _json_req, time as _time_req
-            _entry = {
-                "id": f"req_{int(_time_req.time() * 1000)}",
-                "timestamp": int(_time_req.time() * 1000),
-                "location": "main.py:RequestLogMiddleware",
-                "message": "incoming request",
-                "data": {
-                    "method": request.method,
-                    "path": str(request.url.path),
-                    "query": str(request.url.query)
-                },
-                "runId": "pre-fix-1",
-                "hypothesisId": "H2"
-            }
-            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json_req.dumps(_entry, ensure_ascii=False, default=str) + "\n")
-        except Exception:
-            pass
-        # #endregion
-        response = await call_next(request)
-        # #region agent log
-        try:
-            import json as _json_resp, time as _time_resp
-            _entry = {
-                "id": f"resp_{int(_time_resp.time() * 1000)}",
-                "timestamp": int(_time_resp.time() * 1000),
-                "location": "main.py:RequestLogMiddleware",
-                "message": "response",
-                "data": {
-                    "method": request.method,
-                    "path": str(request.url.path),
-                    "status_code": response.status_code
-                },
-                "runId": "pre-fix-1",
-                "hypothesisId": "H2"
-            }
-            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json_resp.dumps(_entry, ensure_ascii=False, default=str) + "\n")
-        except Exception:
-            pass
-        # #endregion
-        return response
-app.add_middleware(RequestLogMiddleware)
-# #endregion
 
 # CORS middleware
 app.add_middleware(
@@ -144,6 +92,9 @@ app.include_router(profit.router)
 app.include_router(profit_config.router)
 app.include_router(operation_log.router)
 app.include_router(failed_tasks.router)
+app.include_router(emag_sync.router)
+app.include_router(emag_marketplace.router)
+app.include_router(reports.router)
 
 @app.on_event("startup")
 async def startup_event():

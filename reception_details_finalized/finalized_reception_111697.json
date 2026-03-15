@@ -1,0 +1,42 @@
+{
+    "code": 200,
+    "message": "OK",
+    "data": [
+        {
+            "vendorProductId": 8901588962020,
+            "transferredToStorageQuantity": 5,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961962,
+            "transferredToStorageQuantity": 4,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961962,
+            "transferredToStorageQuantity": 1,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961887,
+            "transferredToStorageQuantity": 1,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961887,
+            "transferredToStorageQuantity": 2,
+            "expirationDate": null,
+            "producerLot": null
+        },
+        {
+            "vendorProductId": 8901588961887,
+            "transferredToStorageQuantity": 7,
+            "expirationDate": null,
+            "producerLot": null
+        }
+    ]
+}

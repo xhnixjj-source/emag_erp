@@ -1,0 +1,16 @@
+{
+    "code": 200,
+    "message": "OK",
+    "data": [
+        {
+            "vendorProductId": 8901588962440,
+            "transferredToStorageQuantity": 10,
+            "expirationDate": {
+                "date": "2027-06-19 00:00:00.000000",
+                "timezone_type": 3,
+                "timezone": "Europe/Bucharest"
+            },
+            "producerLot": "20250620"
+        }
+    ]
+}

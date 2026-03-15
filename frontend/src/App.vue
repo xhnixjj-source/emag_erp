@@ -56,6 +56,14 @@
             <el-icon><Document /></el-icon>
             <span>操作日志</span>
           </el-menu-item>
+          <el-menu-item index="/emag-sync">
+            <el-icon><Refresh /></el-icon>
+            <span>店铺数据同步</span>
+          </el-menu-item>
+          <el-menu-item index="/reports">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>数据报表</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
       <el-main class="app-main">
@@ -70,7 +78,7 @@
 import { computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useStore } from 'vuex'
-import { Search, Filter, Monitor, Document, Money, Connection, WarningFilled, Setting, Tools } from '@element-plus/icons-vue'
+import { Search, Filter, Monitor, Document, Money, Connection, WarningFilled, Setting, Tools, Refresh, DataAnalysis } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const route = useRoute()
