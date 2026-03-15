@@ -33,6 +33,7 @@ class EmagAccountRequest(BaseModel):
     platform: str  # ro, bg, hu, fashiondays-ro, fashiondays-bg
     username: str
     password: str
+    shop_id: Optional[int] = None  # 关联店铺 ID（可选）
 
 
 class EmagAccountResponse(BaseModel):
@@ -176,11 +177,11 @@ async def test_connection(
 
 
 # Background task functions
-def run_sync_products(user_id: int):
+def run_sync_products(user_id: int, shop_id: int = None):
     """Background task to sync products"""
     db = SessionLocal()
     try:
-        service = EmagSyncService(db)
+        service = EmagSyncService(db, shop_id=shop_id)
         result = service.sync_products()
         
         # Log operation
@@ -189,9 +190,9 @@ def run_sync_products(user_id: int):
             user_id=user_id,
             operation_type="emag_sync_products",
             target_type="emag_product",
-            operation_detail=result
+            operation_detail={**result, "shop_id": shop_id}
         )
-        logger.info(f"Product sync completed: {result}")
+        logger.info(f"Product sync completed (shop_id={shop_id}): {result}")
     except Exception as e:
         logger.error(f"Product sync failed: {e}", exc_info=True)
         create_operation_log(
@@ -199,17 +200,17 @@ def run_sync_products(user_id: int):
             user_id=user_id,
             operation_type="emag_sync_products",
             target_type="emag_product",
-            operation_detail={"success": False, "error": str(e)}
+            operation_detail={"success": False, "error": str(e), "shop_id": shop_id}
         )
     finally:
         db.close()
 
 
-def run_sync_orders(user_id: int):
+def run_sync_orders(user_id: int, shop_id: int = None):
     """Background task to sync orders"""
     db = SessionLocal()
     try:
-        service = EmagSyncService(db)
+        service = EmagSyncService(db, shop_id=shop_id)
         result = service.sync_orders()
         
         # Log operation
@@ -218,9 +219,9 @@ def run_sync_orders(user_id: int):
             user_id=user_id,
             operation_type="emag_sync_orders",
             target_type="emag_order",
-            operation_detail=result
+            operation_detail={**result, "shop_id": shop_id}
         )
-        logger.info(f"Order sync completed: {result}")
+        logger.info(f"Order sync completed (shop_id={shop_id}): {result}")
     except Exception as e:
         logger.error(f"Order sync failed: {e}", exc_info=True)
         create_operation_log(
@@ -228,17 +229,17 @@ def run_sync_orders(user_id: int):
             user_id=user_id,
             operation_type="emag_sync_orders",
             target_type="emag_order",
-            operation_detail={"success": False, "error": str(e)}
+            operation_detail={"success": False, "error": str(e), "shop_id": shop_id}
         )
     finally:
         db.close()
 
 
-def run_sync_returns(user_id: int):
+def run_sync_returns(user_id: int, shop_id: int = None):
     """Background task to sync returns"""
     db = SessionLocal()
     try:
-        service = EmagSyncService(db)
+        service = EmagSyncService(db, shop_id=shop_id)
         result = service.sync_returns()
         
         # Log operation
@@ -247,9 +248,9 @@ def run_sync_returns(user_id: int):
             user_id=user_id,
             operation_type="emag_sync_returns",
             target_type="emag_return",
-            operation_detail=result
+            operation_detail={**result, "shop_id": shop_id}
         )
-        logger.info(f"Return sync completed: {result}")
+        logger.info(f"Return sync completed (shop_id={shop_id}): {result}")
     except Exception as e:
         logger.error(f"Return sync failed: {e}", exc_info=True)
         create_operation_log(
@@ -257,17 +258,17 @@ def run_sync_returns(user_id: int):
             user_id=user_id,
             operation_type="emag_sync_returns",
             target_type="emag_return",
-            operation_detail={"success": False, "error": str(e)}
+            operation_detail={"success": False, "error": str(e), "shop_id": shop_id}
         )
     finally:
         db.close()
 
 
-def run_sync_all(user_id: int):
+def run_sync_all(user_id: int, shop_id: int = None):
     """Background task to sync all data"""
     db = SessionLocal()
     try:
-        service = EmagSyncService(db)
+        service = EmagSyncService(db, shop_id=shop_id)
         result = service.sync_all()
         
         # Log operation
@@ -276,9 +277,9 @@ def run_sync_all(user_id: int):
             user_id=user_id,
             operation_type="emag_sync_all",
             target_type="emag_sync",
-            operation_detail=result
+            operation_detail={**result, "shop_id": shop_id}
         )
-        logger.info(f"Full sync completed: {result}")
+        logger.info(f"Full sync completed (shop_id={shop_id}): {result}")
     except Exception as e:
         logger.error(f"Full sync failed: {e}", exc_info=True)
         create_operation_log(
@@ -286,7 +287,7 @@ def run_sync_all(user_id: int):
             user_id=user_id,
             operation_type="emag_sync_all",
             target_type="emag_sync",
-            operation_detail={"success": False, "error": str(e)}
+            operation_detail={"success": False, "error": str(e), "shop_id": shop_id}
         )
     finally:
         db.close()
@@ -296,19 +297,18 @@ def run_sync_all(user_id: int):
 @router.post("/products", response_model=SyncResponse)
 async def sync_products(
     background_tasks: BackgroundTasks,
+    shop_id: Optional[int] = Query(None, description="店铺 ID"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
     """Sync products from eMAG API (runs in background)"""
     try:
-        # Start background task
-        background_tasks.add_task(run_sync_products, current_user["id"])
-        
+        background_tasks.add_task(run_sync_products, current_user["id"], shop_id)
         return {
             "success": True,
             "records_count": 0,
             "error": None,
-            "message": "Product sync started in background"
+            "message": f"Product sync started in background (shop_id={shop_id})"
         }
     except Exception as e:
         logger.error(f"Failed to start product sync: {e}", exc_info=True)
@@ -321,19 +321,18 @@ async def sync_products(
 @router.post("/orders", response_model=SyncResponse)
 async def sync_orders(
     background_tasks: BackgroundTasks,
+    shop_id: Optional[int] = Query(None, description="店铺 ID"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
     """Sync orders from eMAG API (runs in background)"""
     try:
-        # Start background task
-        background_tasks.add_task(run_sync_orders, current_user["id"])
-        
+        background_tasks.add_task(run_sync_orders, current_user["id"], shop_id)
         return {
             "success": True,
             "records_count": 0,
             "error": None,
-            "message": "Order sync started in background"
+            "message": f"Order sync started in background (shop_id={shop_id})"
         }
     except Exception as e:
         logger.error(f"Failed to start order sync: {e}", exc_info=True)
@@ -346,19 +345,18 @@ async def sync_orders(
 @router.post("/returns", response_model=SyncResponse)
 async def sync_returns(
     background_tasks: BackgroundTasks,
+    shop_id: Optional[int] = Query(None, description="店铺 ID"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
     """Sync returns from eMAG API (runs in background)"""
     try:
-        # Start background task
-        background_tasks.add_task(run_sync_returns, current_user["id"])
-        
+        background_tasks.add_task(run_sync_returns, current_user["id"], shop_id)
         return {
             "success": True,
             "records_count": 0,
             "error": None,
-            "message": "Return sync started in background"
+            "message": f"Return sync started in background (shop_id={shop_id})"
         }
     except Exception as e:
         logger.error(f"Failed to start return sync: {e}", exc_info=True)
@@ -371,14 +369,13 @@ async def sync_returns(
 @router.post("/all", response_model=SyncAllResponse)
 async def sync_all(
     background_tasks: BackgroundTasks,
+    shop_id: Optional[int] = Query(None, description="店铺 ID"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
     """Sync all data (products, orders, returns) - runs in background"""
     try:
-        # Start background task
-        background_tasks.add_task(run_sync_all, current_user["id"])
-        
+        background_tasks.add_task(run_sync_all, current_user["id"], shop_id)
         return {
             "success": True,
             "results": {
@@ -386,7 +383,7 @@ async def sync_all(
                 "orders": {"success": True, "records_count": 0},
                 "returns": {"success": True, "records_count": 0}
             },
-            "message": "Full sync started in background"
+            "message": f"Full sync started in background (shop_id={shop_id})"
         }
     except Exception as e:
         logger.error(f"Failed to start full sync: {e}", exc_info=True)
@@ -403,6 +400,7 @@ async def get_products(
     limit: int = Query(100, ge=1, le=1000),
     pnk_code: Optional[str] = Query(None),
     ean: Optional[str] = Query(None),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
@@ -410,6 +408,8 @@ async def get_products(
     query = db.query(EmagProduct)
     
     # Apply filters
+    if shop_id is not None:
+        query = query.filter(EmagProduct.shop_id == shop_id)
     if pnk_code:
         query = query.filter(EmagProduct.pnk_code == pnk_code)
     if ean:
@@ -438,6 +438,7 @@ async def get_orders(
     date_start: Optional[str] = Query(None),
     date_end: Optional[str] = Query(None),
     order_status: Optional[int] = Query(None),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
@@ -445,6 +446,8 @@ async def get_orders(
     query = db.query(EmagOrder)
     
     # Apply filters
+    if shop_id is not None:
+        query = query.filter(EmagOrder.shop_id == shop_id)
     if pnk_code:
         query = query.filter(EmagOrder.pnk_code == pnk_code)
     if ean:
@@ -487,6 +490,7 @@ async def get_returns(
     date_start: Optional[str] = Query(None),
     date_end: Optional[str] = Query(None),
     return_status: Optional[int] = Query(None),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
@@ -494,6 +498,8 @@ async def get_returns(
     query = db.query(EmagReturn)
     
     # Apply filters
+    if shop_id is not None:
+        query = query.filter(EmagReturn.shop_id == shop_id)
     if pnk_code:
         query = query.filter(EmagReturn.pnk_code == pnk_code)
     if ean:

@@ -5,8 +5,38 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 
 
+class EmagShop(Base):
+    """eMAG 店铺配置（多店铺核心表）
+    
+    每个店铺包含：
+    - 店铺名称（用于展示和筛选）
+    - API 授权信息（platform / api_username / api_password）
+    - 后台登录信息（login_email / login_password）
+    所有业务数据通过 shop_id 关联到对应店铺。
+    """
+    __tablename__ = "emag_shop"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False, unique=True)          # 店铺名称，如 "RO主店"
+    platform = Column(String(50), nullable=False)                     # ro, bg, hu, fashiondays-ro, fashiondays-bg
+    # API 授权凭据
+    api_username = Column(String(255), nullable=True)                 # Marketplace API 用户名
+    api_password = Column(String(255), nullable=True)                 # Marketplace API 密码
+    api_base_url = Column(String(255), nullable=True)                 # API base URL（根据 platform 自动填充）
+    # 后台登录凭据
+    login_email = Column(String(255), nullable=True)                  # 卖家中心登录邮箱
+    login_password = Column(String(255), nullable=True)               # 卖家中心登录密码
+    is_active = Column(Integer, default=1, nullable=False)            # 1=active, 0=inactive
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index('idx_emag_shop_platform', 'platform'),
+    )
+
+
 class EmagAccount(Base):
-    """eMAG API account configuration (system-wide, single account)"""
+    """eMAG API account configuration (legacy, kept for backward compatibility)"""
     __tablename__ = "emag_account"
     
     id = Column(Integer, primary_key=True, index=True)
@@ -24,7 +54,8 @@ class EmagProduct(Base):
     __tablename__ = "emag_product"
     
     id = Column(Integer, primary_key=True, index=True)
-    product_id = Column(Integer, unique=True, nullable=False, index=True)  # eMAG product ID
+    shop_id = Column(Integer, ForeignKey("emag_shop.id"), nullable=True, index=True)  # 所属店铺
+    product_id = Column(Integer, nullable=False, index=True)  # eMAG product ID
     pnk_code = Column(String(255), nullable=True, index=True)  # PNK code for search
     ean = Column(String(255), nullable=True, index=True)  # EAN/EAN13 code for search
     part_number = Column(String(255), nullable=True)  # Manufacturer part number
@@ -42,9 +73,11 @@ class EmagProduct(Base):
     
     # Indexes for search
     __table_args__ = (
+        UniqueConstraint('product_id', 'shop_id', name='uq_emag_product_shop'),
         Index('idx_emag_product_pnk', 'pnk_code'),
         Index('idx_emag_product_ean', 'ean'),
         Index('idx_emag_product_product_id', 'product_id'),
+        Index('idx_emag_product_shop_id', 'shop_id'),
     )
 
 
@@ -53,6 +86,7 @@ class EmagOrder(Base):
     __tablename__ = "emag_order"
     
     id = Column(Integer, primary_key=True, index=True)
+    shop_id = Column(Integer, ForeignKey("emag_shop.id"), nullable=True, index=True)  # 所属店铺
     order_id = Column(Integer, nullable=False, index=True)  # eMAG order ID
     order_product_id = Column(Integer, nullable=True)  # Order product ID (from API products[].id)
     product_id = Column(Integer, nullable=True, index=True)  # Product ID (foreign key to emag_product)
@@ -96,6 +130,7 @@ class EmagOrder(Base):
         Index('idx_emag_order_order_id', 'order_id'),
         Index('idx_emag_order_order_date', 'order_date'),
         Index('idx_emag_order_status', 'order_status'),
+        Index('idx_emag_order_shop_id', 'shop_id'),
     )
 
 
@@ -104,7 +139,8 @@ class EmagReturn(Base):
     __tablename__ = "emag_return"
     
     id = Column(Integer, primary_key=True, index=True)
-    rma_id = Column(Integer, unique=True, nullable=False, index=True)  # eMAG RMA ID
+    shop_id = Column(Integer, ForeignKey("emag_shop.id"), nullable=True, index=True)  # 所属店铺
+    rma_id = Column(Integer, nullable=False, index=True)  # eMAG RMA ID
     order_id = Column(Integer, nullable=True, index=True)  # Related order ID
     order_product_id = Column(Integer, nullable=True)  # Order product ID
     product_id = Column(Integer, nullable=True, index=True)  # Product ID (foreign key to emag_product)
@@ -134,6 +170,7 @@ class EmagReturn(Base):
     
     # Indexes
     __table_args__ = (
+        UniqueConstraint('rma_id', 'shop_id', name='uq_emag_return_shop'),
         Index('idx_emag_return_product_id', 'product_id'),
         Index('idx_emag_return_pnk', 'pnk_code'),
         Index('idx_emag_return_ean', 'ean'),
@@ -141,6 +178,7 @@ class EmagReturn(Base):
         Index('idx_emag_return_order_id', 'order_id'),
         Index('idx_emag_return_return_date', 'return_date'),
         Index('idx_emag_return_status', 'return_status'),
+        Index('idx_emag_return_shop_id', 'shop_id'),
     )
 
 
@@ -149,7 +187,8 @@ class EmagInboundShipment(Base):
     __tablename__ = "emag_inbound_shipment"
     
     id = Column(Integer, primary_key=True, index=True)
-    reception_id = Column(Integer, unique=True, nullable=False, index=True)  # eMAG reception ID
+    shop_id = Column(Integer, ForeignKey("emag_shop.id"), nullable=True, index=True)  # 所属店铺
+    reception_id = Column(Integer, nullable=False, index=True)  # eMAG reception ID
     status = Column(String(50), nullable=True, index=True)  # Status: finalized, pending, etc.
     
     # Sync information
@@ -162,8 +201,10 @@ class EmagInboundShipment(Base):
     
     # Indexes
     __table_args__ = (
+        UniqueConstraint('reception_id', 'shop_id', name='uq_emag_inbound_shipment_shop'),
         Index('idx_emag_inbound_shipment_reception_id', 'reception_id'),
         Index('idx_emag_inbound_shipment_status', 'status'),
+        Index('idx_emag_inbound_shipment_shop_id', 'shop_id'),
     )
 
 

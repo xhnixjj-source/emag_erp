@@ -60,7 +60,7 @@ def setup_logging():
 # 初始化日志系统
 setup_logging()
 
-from app.routers import auth, keywords, filter_pool, monitor, listing, profit, profit_config, operation_log, failed_tasks, emag_sync, emag_marketplace, reports
+from app.routers import auth, keywords, filter_pool, monitor, listing, profit, profit_config, operation_log, failed_tasks, emag_sync, emag_marketplace, emag_shop, reports
 from app.middleware.operation_log_middleware import OperationLogMiddleware
 from app.services.scheduler import start_scheduler
 
@@ -94,6 +94,7 @@ app.include_router(operation_log.router)
 app.include_router(failed_tasks.router)
 app.include_router(emag_sync.router)
 app.include_router(emag_marketplace.router)
+app.include_router(emag_shop.router)
 app.include_router(reports.router)
 
 @app.on_event("startup")

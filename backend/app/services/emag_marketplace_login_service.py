@@ -44,7 +44,7 @@ class EmagMarketplaceLoginService:
 
     MARKETPLACE_HOME = "https://marketplace.emag.ro/"
     DASHBOARD_URL = "https://marketplace.emag.ro/dashboard"
-    AUTH_STORAGE_FILE = "emag_marketplace_auth.json"  # 保存登录状态的 JSON 文件
+    AUTH_STORAGE_FILE = "emag_marketplace_auth.json"  # 默认登录状态文件（无 shop_id 时兼容）
 
     def __new__(cls) -> "EmagMarketplaceLoginService":
         if cls._instance is None:
@@ -74,10 +74,11 @@ class EmagMarketplaceLoginService:
         self._playwright_instance = None
         self._browser_instance = None
 
-        self._status: str = "not_logged_in"  # not_logged_in|logging_in|waiting_manual_login|logged_in|error
+        self._status: str = "not_logged_in"  # not_logged_in|logging_in|auto_filling|waiting_manual_login|logged_in|error
         self._last_error: Optional[str] = None
         self._last_captcha_png_b64: Optional[str] = None
         self._last_page_info: Optional[LoginPageInfo] = None
+        self._current_shop_id: Optional[int] = None  # 当前登录的店铺 ID
         
         # 入仓运单同步结果
         self._last_sync_result: Optional[Dict[str, Any]] = None
@@ -93,6 +94,24 @@ class EmagMarketplaceLoginService:
     # Public API
     # ------------------------------------------------------------------ #
 
+    def _get_auth_storage_path(self, shop_id: Optional[int] = None) -> Path:
+        """获取登录状态文件路径。每个店铺独立一份 auth 文件。"""
+        project_root = get_project_root()
+        if shop_id:
+            return project_root / f"emag_marketplace_auth_shop_{shop_id}.json"
+        return project_root / self.AUTH_STORAGE_FILE
+
+    def set_current_shop_id(self, shop_id: Optional[int]) -> None:
+        """设置当前登录关联的店铺 ID，并切换 auth 存储路径"""
+        with self._lock:
+            self._current_shop_id = shop_id
+            self._auth_storage_path = self._get_auth_storage_path(shop_id)
+
+    def get_current_shop_id(self) -> Optional[int]:
+        """获取当前登录关联的店铺 ID"""
+        with self._lock:
+            return self._current_shop_id
+
     def get_login_status(self) -> Dict[str, Any]:
         with self._lock:
             info = self._last_page_info.__dict__ if self._last_page_info else None
@@ -101,6 +120,7 @@ class EmagMarketplaceLoginService:
                 "error": self._last_error,
                 "captcha_screenshot_b64": self._last_captcha_png_b64,
                 "page_info": info,
+                "shop_id": self._current_shop_id,
             }
     
     def get_sync_status(self) -> Dict[str, Any]:
@@ -129,7 +149,10 @@ class EmagMarketplaceLoginService:
 
     def login(self, username: str = None, password: str = None) -> Dict[str, Any]:
         """
-        执行登录（手动登录方式，完全参照 login_test.py）。
+        执行登录流程：
+        1. 先以 headless 模式启动浏览器，尝试自动填充用户名密码
+        2. 如遇到 SMS 验证码 → 返回状态让前端输入
+        3. 如遇到 CAPTCHA 或自动填充失败 → 切换到 headful 模式（弹窗 fallback）
         
         注意：此方法必须在独立线程中调用（不能在 asyncio 事件循环中），
         因为 sync_playwright() 不兼容 asyncio 环境。
@@ -148,11 +171,11 @@ class EmagMarketplaceLoginService:
 
             from playwright.sync_api import sync_playwright
             
-            logger.info("开始登录流程（参照 login_test.py）")
+            logger.info("开始登录流程（headless 自动填充模式）")
             
-            # 与 login_test.py 完全一致的流程
+            # ── 阶段 1: headless 自动填充 ──
             playwright_instance = sync_playwright().start()
-            browser = playwright_instance.chromium.launch(headless=False)
+            browser = playwright_instance.chromium.launch(headless=True)
             
             if self._auth_storage_path.exists():
                 try:
@@ -164,18 +187,132 @@ class EmagMarketplaceLoginService:
                 context = browser.new_context()
             
             page = context.new_page()
+            need_fallback = False  # 是否需要弹窗 fallback
             
             try:
-                page.goto(self.MARKETPLACE_HOME, wait_until="domcontentloaded", timeout=15000)
+                page.goto(self.MARKETPLACE_HOME, wait_until="domcontentloaded", timeout=20000)
                 time.sleep(1)
                 
-                if "dashboard" not in page.url:
-                    logger.info("登录失效或首次登录，请在浏览器中手动登录...")
+                current_url = page.url or ""
+                logger.info(f"导航完成，当前 URL: {current_url}")
+                
+                # #region agent log
+                import json as _dbg_j6; _dbg_lp6 = r"d:\emag_erp\.cursor\debug.log"
+                def _dbg_w6(loc, msg, data, hyp):
+                    try:
+                        import time as _t
+                        with open(_dbg_lp6, "a", encoding="utf-8") as _f:
+                            _f.write(_dbg_j6.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                _is_li = self._is_logged_in(page)
+                _has_dash = "dashboard" in current_url
+                _dbg_w6("login_svc:login:phase1_check", "login state check at phase 1", {"url": current_url, "_is_logged_in": _is_li, "dashboard_in_url": _has_dash, "username_provided": bool(username), "password_provided": bool(password)}, "H5,H7")
+                # #endregion
+
+                if _is_li or _has_dash:
+                    # storage_state 仍然有效，直接登录成功
+                    logger.info("storage_state 有效，已自动登录")
+                elif username and password:
+                    # 需要登录，尝试自动填充
+                    with self._lock:
+                        self._status = "auto_filling"
+                    
+                    logger.info("开始自动填充登录表单（多步登录）...")
+                    auto_fill_ok = self._fill_login_form_multistep(page, username, password)
+                    
+                    # #region agent log
+                    _dbg_w6("login_svc:login:auto_fill_result", "auto fill result", {"auto_fill_ok": auto_fill_ok, "url_after": page.url}, "H7")
+                    # #endregion
+
+                    if not auto_fill_ok:
+                        logger.warning("自动填充登录表单失败，将切换到弹窗 fallback")
+                        need_fallback = True
+                    else:
+                        # 自动填充完成，等待页面响应
+                        time.sleep(1)
+                        self._wait_after_submit(page)
+                        current_url = page.url or ""
+                        logger.info(f"表单提交后 URL: {current_url}")
+                        
+                        # 检查结果
+                        if self._is_logged_in(page) or "dashboard" in current_url:
+                            logger.info("自动填充后登录成功")
+                        elif self._is_captcha_present(page):
+                            logger.info("检测到 CAPTCHA，切换到弹窗 fallback")
+                            need_fallback = True
+                        elif self._is_sms_verification_required(page):
+                            logger.info("检测到需要 SMS 验证码")
+                            shot = self._screenshot_png_b64(page)
+                            with self._lock:
+                                self._status = "sms_verification_required"
+                                self._last_captcha_png_b64 = shot
+                                self._last_error = None
+                                self._browser_instance = browser
+                                self._playwright_instance = playwright_instance
+                                self._context = context
+                                self._page = page
+                                self._owner_thread_id = threading.current_thread().ident
+                            # 保持浏览器存活，等待用户输入验证码
+                            return self.get_login_status()
+                        else:
+                            # 可能用户名密码错误或页面未跳转
+                            logger.warning(f"自动填充后状态不明，当前 URL: {current_url}")
+                            # 尝试截图看看当前页面状态
+                            try:
+                                shot = self._screenshot_png_b64(page)
+                                logger.info("已截取当前页面截图用于诊断")
+                            except Exception:
+                                shot = None
+                            need_fallback = True
+                else:
+                    # 没有提供用户名密码且 storage_state 失效
+                    logger.info("未提供用户名密码且 storage_state 失效")
+                    need_fallback = True
+                
+                if need_fallback:
+                    # ── 阶段 2: 关闭 headless，切换到 headful fallback ──
+                    logger.info("关闭 headless 浏览器，切换到 headful 弹窗模式...")
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                    try:
+                        playwright_instance.stop()
+                    except Exception:
+                        pass
+                    
+                    # 重新启动 headful 浏览器
+                    playwright_instance = sync_playwright().start()
+                    browser = playwright_instance.chromium.launch(headless=False)
+                    
+                    if self._auth_storage_path.exists():
+                        try:
+                            context = browser.new_context(storage_state=str(self._auth_storage_path))
+                        except Exception:
+                            context = browser.new_context()
+                    else:
+                        context = browser.new_context()
+                    
+                    page = context.new_page()
+                    page.goto(self.MARKETPLACE_HOME, wait_until="domcontentloaded", timeout=20000)
+                    time.sleep(1)
+                    
+                    # 如果有用户名密码，先尝试预填（方便用户直接提交）
+                    if username and password and "dashboard" not in (page.url or ""):
+                        try:
+                            self._prefill_login_form(page, username, password)
+                            logger.info("已在弹窗中预填用户名密码")
+                        except Exception as e:
+                            logger.warning(f"预填表单失败: {e}")
+                    
                     with self._lock:
                         self._status = "waiting_manual_login"
+                    
+                    logger.info("等待用户在弹窗中手动完成登录...")
                     page.wait_for_url("**/dashboard**", timeout=0)
                 
-                # 登录成功，保存状态
+                # 到这里说明已登录成功（自动或手动）
                 context.storage_state(path=str(self._auth_storage_path))
                 logger.info(f"登录状态已保存到: {self._auth_storage_path}")
                 
@@ -725,48 +862,151 @@ class EmagMarketplaceLoginService:
     # Login flow helpers
     # ------------------------------------------------------------------ #
 
-    def _fill_login_form(self, page: Page, username: str, password: str) -> None:
-        # 常见：email/username + password
-        user_selectors = [
-            'input[name="email"]',
-            'input[type="email"]',
-            'input[name="username"]',
-            'input[id*="email" i]',
-            'input[placeholder*="email" i]',
-            'input[placeholder*="e-mail" i]',
-            'input[autocomplete="username"]',
-        ]
-        pass_selectors = [
-            'input[name="password"]',
-            'input[type="password"]',
-            'input[autocomplete="current-password"]',
-        ]
+    # ------------------------------------------------------------------ #
+    # Login form helpers
+    # ------------------------------------------------------------------ #
 
-        user_el = self._first_visible(page, user_selectors)
-        pass_el = self._first_visible(page, pass_selectors)
+    _USER_SELECTORS = [
+        'input[name="email"]',
+        'input[type="email"]',
+        'input[name="username"]',
+        'input[id*="email" i]',
+        'input[placeholder*="email" i]',
+        'input[placeholder*="e-mail" i]',
+        'input[autocomplete="username"]',
+    ]
+    _PASS_SELECTORS = [
+        'input[name="password"]',
+        'input[type="password"]',
+        'input[autocomplete="current-password"]',
+    ]
+    _SUBMIT_SELECTORS = [
+        'button[type="submit"]',
+        'button:has-text("Login")',
+        'button:has-text("Sign in")',
+        'button:has-text("Autentificare")',
+        'button:has-text("Conectare")',
+        'button:has-text("Next")',
+        'button:has-text("Continue")',
+        'input[type="submit"]',
+    ]
 
-        if user_el:
+    def _fill_login_form_multistep(self, page: Page, username: str, password: str) -> bool:
+        """
+        处理 eMAG 的多步登录表单：
+        - 第 1 步：填写邮箱 → 点击提交/下一步
+        - 第 2 步：填写密码 → 点击登录
+        如果是单步表单（邮箱和密码同时可见），则一次填完。
+        
+        返回 True 表示表单提交成功（不代表已登录），False 表示找不到表单元素。
+        """
+        try:
+            # 等待页面加载稳定
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
+            time.sleep(1)
+
+            # 查找邮箱输入框
+            user_el = self._first_visible(page, self._USER_SELECTORS)
+            if not user_el:
+                logger.warning("未找到邮箱/用户名输入框")
+                return False
+
+            # 查找密码输入框
+            pass_el = self._first_visible(page, self._PASS_SELECTORS)
+
+            if user_el and pass_el:
+                # ── 单步表单：邮箱和密码同时可见 ──
+                logger.info("检测到单步登录表单，同时填写邮箱和密码")
+                user_el.click()
+                user_el.fill(username)
+                time.sleep(0.3)
+                pass_el.click()
+                pass_el.fill(password)
+                time.sleep(0.3)
+
+                btn = self._first_visible(page, self._SUBMIT_SELECTORS)
+                if btn:
+                    btn.click()
+                else:
+                    page.keyboard.press("Enter")
+                logger.info("单步表单已提交")
+                return True
+
+            # ── 多步表单：只看到邮箱，密码还不可见 ──
+            logger.info("检测到多步登录表单（仅邮箱可见），开始第 1 步")
             user_el.click()
             user_el.fill(username)
-        if pass_el:
+            time.sleep(0.3)
+
+            # 第 1 步：提交邮箱
+            btn = self._first_visible(page, self._SUBMIT_SELECTORS)
+            if btn:
+                btn.click()
+            else:
+                page.keyboard.press("Enter")
+            logger.info("第 1 步：邮箱已提交，等待密码输入框出现...")
+
+            # 等待密码输入框出现（最多等 10 秒）
+            pass_el = None
+            for attempt in range(20):
+                time.sleep(0.5)
+                pass_el = self._first_visible(page, self._PASS_SELECTORS)
+                if pass_el:
+                    logger.info(f"密码输入框在第 {attempt + 1} 次检查时出现")
+                    break
+                # 如果页面出现了 CAPTCHA 或错误提示，提前退出
+                if self._is_captcha_present(page):
+                    logger.info("第 1 步提交后出现 CAPTCHA")
+                    return False
+            
+            if not pass_el:
+                logger.warning("等待密码输入框超时（10 秒），多步登录失败")
+                return False
+
+            # 第 2 步：填写密码并提交
+            logger.info("第 2 步：填写密码并提交")
             pass_el.click()
             pass_el.fill(password)
+            time.sleep(0.3)
 
-        # 提交按钮
-        submit_selectors = [
-            'button[type="submit"]',
-            'button:has-text("Login")',
-            'button:has-text("Sign in")',
-            'button:has-text("Autentificare")',
-            'button:has-text("Conectare")',
-            'input[type="submit"]',
-        ]
-        btn = self._first_visible(page, submit_selectors)
-        if btn:
-            btn.click()
-        else:
-            # fallback：按 Enter
-            page.keyboard.press("Enter")
+            btn = self._first_visible(page, self._SUBMIT_SELECTORS)
+            if btn:
+                btn.click()
+            else:
+                page.keyboard.press("Enter")
+            logger.info("第 2 步：密码已提交")
+            return True
+
+        except Exception as e:
+            logger.exception(f"多步登录表单填充失败: {e}")
+            return False
+
+    def _prefill_login_form(self, page: Page, username: str, password: str) -> None:
+        """
+        在弹窗 fallback 模式中预填表单（仅填充，不提交），方便用户手动检查后提交。
+        """
+        try:
+            time.sleep(1)
+            user_el = self._first_visible(page, self._USER_SELECTORS)
+            if user_el:
+                user_el.click()
+                user_el.fill(username)
+                logger.info("已预填邮箱")
+
+            pass_el = self._first_visible(page, self._PASS_SELECTORS)
+            if pass_el:
+                pass_el.click()
+                pass_el.fill(password)
+                logger.info("已预填密码")
+        except Exception as e:
+            logger.warning(f"预填表单失败: {e}")
+
+    def _fill_login_form(self, page: Page, username: str, password: str) -> None:
+        """向后兼容的旧接口，内部调用多步方法。"""
+        self._fill_login_form_multistep(page, username, password)
 
     def _wait_after_submit(self, page: Page) -> None:
         try:
@@ -926,13 +1166,39 @@ class EmagMarketplaceLoginService:
             logger.exception(f"检测手机验证码时出错: {e}")
             return False
 
+    # 公共首页 URL 模式（未登录时跳转到的页面）
+    _PUBLIC_PAGE_PATTERNS = ("/ro", "/bg", "/hu", "/pl")
+
     def _is_logged_in(self, page: Page) -> bool:
         """
         通过 URL + 页面元素双重判断已登录态（尽量稳健）。
         """
+        # #region agent log
+        import json as _dbg_j5
+        _dbg_lp5 = r"d:\emag_erp\.cursor\debug.log"
+        def _dbg_w5(loc, msg, data, hyp):
+            try:
+                import time as _t
+                with open(_dbg_lp5, "a", encoding="utf-8") as _f:
+                    _f.write(_dbg_j5.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+        # #endregion
         try:
             url = page.url or ""
+
+            # 排除公共首页：marketplace.emag.ro/ro, /bg, /hu 等是未登录公共页面
+            url_path = url.rstrip("/").split("marketplace.emag.ro")[-1] if "marketplace.emag.ro" in url else ""
+            if url_path in self._PUBLIC_PAGE_PATTERNS:
+                # #region agent log
+                _dbg_w5("login_svc:_is_logged_in", "public page detected -> False", {"url": url, "url_path": url_path}, "H5")
+                # #endregion
+                return False
+
             if "marketplace.emag.ro/dashboard" in url:
+                # #region agent log
+                _dbg_w5("login_svc:_is_logged_in", "dashboard in URL -> True", {"url": url}, "H5")
+                # #endregion
                 return True
             # 有时会跳到别的后台页，只要不是 auth 域并且出现 dashboard 元素就算登录
             if "auth.emag" not in url and "marketplace.emag.ro" in url:
@@ -940,13 +1206,16 @@ class EmagMarketplaceLoginService:
                 logged_in_markers = [
                     'a[href*="/dashboard"]',
                     'a:has-text("Dashboard")',
-                    'a:has-text("Cont")',
                     'button:has-text("Logout")',
                     'a:has-text("Logout")',
                 ]
                 for sel in logged_in_markers:
                     loc = page.locator(sel)
-                    if loc.count() > 0:
+                    cnt = loc.count()
+                    if cnt > 0:
+                        # #region agent log
+                        _dbg_w5("login_svc:_is_logged_in", "marker matched", {"url": url, "selector": sel, "count": cnt}, "H5")
+                        # #endregion
                         return True
         except Exception:
             return False
@@ -1012,6 +1281,19 @@ class EmagMarketplaceLoginService:
             (playwright_instance, browser, context, page) 元组
             调用方负责在使用完毕后关闭 browser 和 playwright_instance。
         """
+        # #region agent log
+        import json as _dbg_json
+        _dbg_log_path = r"d:\emag_erp\.cursor\debug.log"
+        def _dbg_write(loc, msg, data, hyp):
+            try:
+                import time as _t
+                with open(_dbg_log_path, "a", encoding="utf-8") as _f:
+                    _f.write(_dbg_json.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+        _dbg_write("login_svc:_create_authed_page:entry", "auth_storage_path and shop_id", {"auth_storage_path": str(self._auth_storage_path), "path_exists": self._auth_storage_path.exists(), "current_shop_id": self._current_shop_id}, "H1")
+        # #endregion
+
         if not self._auth_storage_path.exists():
             raise Exception("未找到保存的登录状态，请先登录")
         
@@ -1021,17 +1303,43 @@ class EmagMarketplaceLoginService:
         context = browser.new_context(storage_state=str(self._auth_storage_path))
         page = context.new_page()
         
-        # 导航到 marketplace 首页，验证登录状态
-        page.goto(self.MARKETPLACE_HOME, wait_until="domcontentloaded", timeout=15000)
-        time.sleep(1)
+        # 导航到 Dashboard（而非首页），已登录时会停留在 dashboard，未登录时会被重定向
+        page.goto(self.DASHBOARD_URL, wait_until="domcontentloaded", timeout=15000)
+        time.sleep(2)
         
-        if "auth.emag" in page.url or "/login" in page.url:
+        current_url = page.url or ""
+        # #region agent log
+        _dbg_write("login_svc:_create_authed_page:after_nav", "page URL after dashboard navigation", {"url": current_url, "title": page.title()}, "H6")
+        # #endregion
+
+        # 判断是否在 dashboard 或其他已登录的后台页面
+        on_dashboard = "dashboard" in current_url
+        on_auth_page = "auth.emag" in current_url or "/login" in current_url
+        # 公共首页 /ro, /bg, /hu 等表示被踢出登录
+        on_public_page = bool(current_url.rstrip("/").split("/")[-1] in ("ro", "bg", "hu") and "marketplace.emag" in current_url)
+
+        logged_in = on_dashboard and not on_auth_page and not on_public_page
+
+        # #region agent log
+        _dbg_write("login_svc:_create_authed_page:login_check", "login detection result", {"url": current_url, "on_dashboard": on_dashboard, "on_auth_page": on_auth_page, "on_public_page": on_public_page, "logged_in": logged_in}, "H6")
+        # #endregion
+
+        if not logged_in:
             # 登录状态已失效
             browser.close()
             pw.stop()
             with self._lock:
                 self._status = "not_logged_in"
-            raise Exception("保存的登录状态已失效，请重新登录")
+            # 删除过期的 auth 文件，避免反复使用失效 cookie
+            if self._auth_storage_path.exists():
+                try:
+                    self._auth_storage_path.unlink()
+                    logger.info(f"已删除过期的登录状态文件: {self._auth_storage_path}")
+                except Exception:
+                    pass
+            raise Exception(
+                f"保存的登录状态已失效（页面被重定向到: {current_url}），请重新登录"
+            )
         
         logger.info(f"已创建认证会话，当前 URL: {page.url}")
         return pw, browser, context, page
@@ -1181,6 +1489,19 @@ class EmagMarketplaceLoginService:
         try:
             pw, browser, context, page_obj = self._create_authed_page()
             
+            # #region agent log
+            import json as _dbg_json2
+            _dbg_log_path2 = r"d:\emag_erp\.cursor\debug.log"
+            def _dbg_write2(loc, msg, data, hyp):
+                try:
+                    import time as _t
+                    with open(_dbg_log_path2, "a", encoding="utf-8") as _f:
+                        _f.write(_dbg_json2.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+            _dbg_write2("login_svc:sync_shipments:page_ready", "page state before fetch", {"url": page_obj.url, "title": page_obj.title()}, "H2,H3")
+            # #endregion
+
             # 1. 获取运单列表
             logger.info("正在获取运单列表...")
             list_payload = {
@@ -1190,6 +1511,10 @@ class EmagMarketplaceLoginService:
                 "rows": limit
             }
             
+            # #region agent log
+            _dbg_write2("login_svc:sync_shipments:before_fetch", "about to call JS fetch", {"page_url": page_obj.url}, "H3,H4")
+            # #endregion
+
             list_res = page_obj.evaluate(f"""
                 async () => {{
                     try {{
@@ -1201,13 +1526,19 @@ class EmagMarketplaceLoginService:
                             }},
                             body: JSON.stringify({json.dumps(list_payload)})
                         }});
-                        return await res.json();
+                        const status = res.status;
+                        const text = await res.text();
+                        try {{ return JSON.parse(text); }} catch(pe) {{ return "ERROR_JS_HTTP" + status + "_" + text.substring(0, 500); }}
                     }} catch (e) {{
                         return "ERROR_JS_" + e.message;
                     }}
                 }}
             """)
             
+            # #region agent log
+            _dbg_write2("login_svc:sync_shipments:after_fetch", "fetch result", {"type": type(list_res).__name__, "is_error": isinstance(list_res, str) and str(list_res).startswith("ERROR_JS_"), "preview": str(list_res)[:500]}, "H2,H3,H4")
+            # #endregion
+
             if isinstance(list_res, str) and list_res.startswith("ERROR_JS_"):
                 raise RuntimeError(f"获取运单列表失败: {list_res}")
             
@@ -1290,6 +1621,7 @@ class EmagMarketplaceLoginService:
                     
                     # 写入数据库
                     shipment = EmagInboundShipment(
+                        shop_id=self._current_shop_id,
                         reception_id=reception_id,
                         status=item.get("status", "finalized"),
                         synced_at=datetime.utcnow()

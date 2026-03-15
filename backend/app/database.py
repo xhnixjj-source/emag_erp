@@ -28,7 +28,7 @@ from app.models.profit_config_models import (
     PackagingTemplate, CommissionConfig, FeeTemplate
 )
 from app.models.listing import ListingPool, ListingDetails, ProfitCalculation, ListingStatus
-from app.models.emag_sync import EmagAccount, EmagProduct, EmagOrder, EmagReturn
+from app.models.emag_sync import EmagShop, EmagAccount, EmagProduct, EmagOrder, EmagReturn, EmagInboundShipment, EmagInboundShipmentDetail
 from app.models.emag_ads import AdsCampaign, AdsAdset, AdsProductPerformance
 
 

@@ -1,5 +1,5 @@
 """eMAG Ads campaign / adset / product performance models"""
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -9,6 +9,7 @@ class AdsCampaign(Base):
     __tablename__ = "ads_campaigns"
 
     id = Column(Integer, primary_key=True, index=True)
+    shop_id = Column(Integer, ForeignKey("emag_shop.id"), nullable=True, index=True)  # 所属店铺
     campaign_id = Column(Integer, nullable=False, index=True)  # eMAG campaign ID
     marketplace = Column(String(10), nullable=False, default="ro", index=True)  # ro / bg / hu
     name = Column(String(500), nullable=True)
@@ -29,6 +30,7 @@ class AdsAdset(Base):
     __tablename__ = "ads_adsets"
 
     id = Column(Integer, primary_key=True, index=True)
+    shop_id = Column(Integer, ForeignKey("emag_shop.id"), nullable=True, index=True)  # 所属店铺
     adset_id = Column(Integer, nullable=False, index=True)        # eMAG adset ID
     campaign_id = Column(Integer, nullable=False, index=True)     # 所属 campaign ID
     marketplace = Column(String(10), nullable=False, default="ro", index=True)  # ro / bg / hu
@@ -50,6 +52,7 @@ class AdsProductPerformance(Base):
     __tablename__ = "ads_product_performance"
 
     id = Column(Integer, primary_key=True, index=True)
+    shop_id = Column(Integer, ForeignKey("emag_shop.id"), nullable=True, index=True)  # 所属店铺
     marketplace = Column(String(10), nullable=False, default="ro", index=True)  # ro / bg / hu
     campaign_id = Column(Integer, nullable=False, index=True)
     campaign_name = Column(String(500), nullable=True)

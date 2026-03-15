@@ -4,6 +4,23 @@
       <template #header>
         <div class="card-header">
           <span>数据报表</span>
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span style="font-size: 13px; color: #606266; font-weight: normal">店铺:</span>
+            <el-select
+              v-model="currentShopId"
+              placeholder="全部店铺"
+              clearable
+              style="width: 200px"
+              @change="handleShopChange"
+            >
+              <el-option
+                v-for="shop in shops"
+                :key="shop.id"
+                :label="shop.name"
+                :value="shop.id"
+              />
+            </el-select>
+          </div>
         </div>
       </template>
 
@@ -179,8 +196,13 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { reportsApi } from '@/api/reports'
+import { emagSyncApi } from '@/api/emagSync'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
+
+// ----- Shop selector -----
+const shops = ref([])
+const currentShopId = ref(null)
 
 // ----- Active tab -----
 const activeTab = ref('product-summary')
@@ -216,12 +238,32 @@ const debouncedLoadAds = () => {
   adsTimer = setTimeout(() => loadAdsWeekly(), 400)
 }
 
+// ----- Load shops -----
+const loadShops = async () => {
+  try {
+    const res = await emagSyncApi.getShops()
+    shops.value = (res && res.items) ? res.items : (Array.isArray(res) ? res : [])
+  } catch (e) {
+    shops.value = []
+  }
+}
+
+const handleShopChange = () => {
+  // Reload current tab data with new shop filter
+  if (activeTab.value === 'product-summary') {
+    loadProductSummary()
+  } else if (activeTab.value === 'ads-weekly') {
+    loadAdsWeekly()
+  }
+}
+
 // ----- Load data -----
 const loadProductSummary = async () => {
   loadingSummary.value = true
   try {
     const params = {}
     if (summarySearch.value) params.search = summarySearch.value
+    if (currentShopId.value) params.shop_id = currentShopId.value
     const res = await reportsApi.getProductSummary(params)
     summaryData.value = res?.items || []
   } catch (e) {
@@ -238,6 +280,7 @@ const loadAdsWeekly = async () => {
     const params = {}
     if (adsWeek.value) params.week = adsWeek.value
     if (adsSearch.value) params.search = adsSearch.value
+    if (currentShopId.value) params.shop_id = currentShopId.value
     const res = await reportsApi.getAdsWeekly(params)
     adsData.value = res?.items || []
     if (res?.weeks) {
@@ -260,10 +303,13 @@ const handleTabChange = (tab) => {
 }
 
 // ----- Init -----
-onMounted(() => {
+onMounted(async () => {
+  await loadShops()
   loadProductSummary()
   // Pre-load weeks list
-  reportsApi.getAdsWeekly({ search: '__none__' }).then(res => {
+  const weekParams = { search: '__none__' }
+  if (currentShopId.value) weekParams.shop_id = currentShopId.value
+  reportsApi.getAdsWeekly(weekParams).then(res => {
     if (res?.weeks) availableWeeks.value = res.weeks
   }).catch(() => {})
 })

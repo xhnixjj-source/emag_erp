@@ -8,7 +8,7 @@ from datetime import datetime, date
 
 from app.database import get_db
 from app.middleware.auth_middleware import require_auth
-from app.models.emag_sync import EmagProduct, EmagOrder, EmagReturn, EmagInboundShipmentDetail
+from app.models.emag_sync import EmagProduct, EmagOrder, EmagReturn, EmagInboundShipment, EmagInboundShipmentDetail
 from app.models.emag_ads import AdsProductPerformance
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 @router.get("/product-summary")
 async def product_summary(
     search: Optional[str] = Query(None, description="Search by product name / PNK / EAN"),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
@@ -36,36 +37,41 @@ async def product_summary(
     # Sub-queries ----------------------------------------------------------
 
     # 订单数: 按 product_id 汇总 quantity (排除取消订单 status=0)
-    order_sub = (
+    order_q = (
         db.query(
             EmagOrder.product_id.label("product_id"),
             func.count(EmagOrder.id).label("order_count"),
             func.coalesce(func.sum(EmagOrder.quantity), 0).label("order_quantity"),
         )
         .filter(EmagOrder.order_status != 0)  # 排除取消
-        .group_by(EmagOrder.product_id)
-        .subquery("order_sub")
     )
+    if shop_id is not None:
+        order_q = order_q.filter(EmagOrder.shop_id == shop_id)
+    order_sub = order_q.group_by(EmagOrder.product_id).subquery("order_sub")
 
     # 退货数量: 按 product_id 汇总 quantity
-    return_sub = (
+    return_q = (
         db.query(
             EmagReturn.product_id.label("product_id"),
             func.coalesce(func.sum(EmagReturn.quantity), 0).label("return_quantity"),
         )
-        .group_by(EmagReturn.product_id)
-        .subquery("return_sub")
     )
+    if shop_id is not None:
+        return_q = return_q.filter(EmagReturn.shop_id == shop_id)
+    return_sub = return_q.group_by(EmagReturn.product_id).subquery("return_sub")
 
     # 发货数: EmagInboundShipmentDetail.vendor_product_id == product.product_id
-    shipment_sub = (
+    shipment_q = (
         db.query(
             EmagInboundShipmentDetail.vendor_product_id.label("product_id"),
             func.coalesce(func.sum(EmagInboundShipmentDetail.transferred_to_storage_quantity), 0).label("shipment_quantity"),
         )
-        .group_by(EmagInboundShipmentDetail.vendor_product_id)
-        .subquery("shipment_sub")
     )
+    if shop_id is not None:
+        shipment_q = shipment_q.join(
+            EmagInboundShipment, EmagInboundShipmentDetail.shipment_id == EmagInboundShipment.id
+        ).filter(EmagInboundShipment.shop_id == shop_id)
+    shipment_sub = shipment_q.group_by(EmagInboundShipmentDetail.vendor_product_id).subquery("shipment_sub")
 
     # Main query -----------------------------------------------------------
     query = (
@@ -86,6 +92,10 @@ async def product_summary(
         .outerjoin(return_sub, EmagProduct.product_id == return_sub.c.product_id)
         .outerjoin(shipment_sub, EmagProduct.product_id == shipment_sub.c.product_id)
     )
+
+    # shop_id filter on main product table
+    if shop_id is not None:
+        query = query.filter(EmagProduct.shop_id == shop_id)
 
     # Optional search
     if search:
@@ -125,6 +135,7 @@ async def product_summary(
 async def ads_weekly(
     week: Optional[str] = Query(None, description="ISO week string, e.g. 2026-W11. If empty, return all weeks."),
     search: Optional[str] = Query(None, description="Search by product name / PNK"),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
@@ -142,20 +153,20 @@ async def ads_weekly(
     # SQLite: strftime('%Y-W%W', date_start)
     week_expr = func.strftime('%Y-W%W', AdsProductPerformance.date_start).label("week")
 
-    query = (
-        db.query(
-            AdsProductPerformance.product_id,
-            func.max(AdsProductPerformance.product_name).label("product_name"),
-            func.max(AdsProductPerformance.part_number).label("part_number"),
-            week_expr,
-            func.coalesce(func.sum(AdsProductPerformance.impressions), 0).label("impressions"),
-            func.coalesce(func.sum(AdsProductPerformance.clicks), 0).label("clicks"),
-            func.coalesce(func.sum(AdsProductPerformance.cost), 0).label("cost"),
-            func.coalesce(func.sum(AdsProductPerformance.sales), 0).label("sales"),
-            func.coalesce(func.sum(AdsProductPerformance.products_sold), 0).label("products_sold"),
-        )
-        .group_by(AdsProductPerformance.product_id, week_expr)
+    base_q = db.query(
+        AdsProductPerformance.product_id,
+        func.max(AdsProductPerformance.product_name).label("product_name"),
+        func.max(AdsProductPerformance.part_number).label("part_number"),
+        week_expr,
+        func.coalesce(func.sum(AdsProductPerformance.impressions), 0).label("impressions"),
+        func.coalesce(func.sum(AdsProductPerformance.clicks), 0).label("clicks"),
+        func.coalesce(func.sum(AdsProductPerformance.cost), 0).label("cost"),
+        func.coalesce(func.sum(AdsProductPerformance.sales), 0).label("sales"),
+        func.coalesce(func.sum(AdsProductPerformance.products_sold), 0).label("products_sold"),
     )
+    if shop_id is not None:
+        base_q = base_q.filter(AdsProductPerformance.shop_id == shop_id)
+    query = base_q.group_by(AdsProductPerformance.product_id, week_expr)
 
     # Optional week filter
     if week:
@@ -195,10 +206,13 @@ async def ads_weekly(
         })
 
     # Collect distinct weeks for filter dropdown
+    week_dropdown_q = db.query(
+        func.strftime('%Y-W%W', AdsProductPerformance.date_start).label("week")
+    )
+    if shop_id is not None:
+        week_dropdown_q = week_dropdown_q.filter(AdsProductPerformance.shop_id == shop_id)
     week_query = (
-        db.query(
-            func.strftime('%Y-W%W', AdsProductPerformance.date_start).label("week")
-        )
+        week_dropdown_q
         .distinct()
         .order_by(func.strftime('%Y-W%W', AdsProductPerformance.date_start).desc())
         .all()

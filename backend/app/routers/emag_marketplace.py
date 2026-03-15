@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.middleware.auth_middleware import require_auth
 from app.services.emag_marketplace_login_service import emag_marketplace_login_service
-from app.services.emag_ads_service import sync_ads_data, query_ads_performance
+from app.services.emag_ads_service import sync_ads_data, query_ads_performance, get_ads_sync_progress, _split_into_iso_weeks
 from app.database import get_db, SessionLocal
 from app.models.emag_sync import EmagInboundShipment, EmagInboundShipmentDetail
 
@@ -18,8 +18,9 @@ router = APIRouter(prefix="/api/emag-marketplace", tags=["emag-marketplace"])
 
 
 class MarketplaceLoginRequest(BaseModel):
-    username: Optional[str] = None  # 手动登录方式，不需要用户名密码
-    password: Optional[str] = None
+    username: Optional[str] = None  # eMAG 登录邮箱
+    password: Optional[str] = None  # eMAG 登录密码
+    shop_id: Optional[int] = None   # 关联店铺 ID
 
 
 class MarketplaceSmsCodeRequest(BaseModel):
@@ -30,6 +31,7 @@ class AdsSyncRequest(BaseModel):
     date_start: str   # YYYY-MM-DD
     date_end: str     # YYYY-MM-DD
     marketplace: str = "ro"  # ro / bg / hu
+    shop_id: Optional[int] = None  # 关联店铺 ID
 
 
 @router.post("/login")
@@ -42,6 +44,8 @@ async def marketplace_login(
     必须用 threading.Thread 而非 background_tasks，
     因为 sync_playwright() 不能在 asyncio 事件循环中调用。
     """
+    # 记住当前登录的 shop_id，以便后续同步数据关联到该店铺
+    emag_marketplace_login_service.set_current_shop_id(payload.shop_id)
 
     def _run():
         try:
@@ -166,12 +170,15 @@ async def get_inbound_shipments(
     limit: int = Query(50, ge=1, le=500),
     reception_id: Optional[int] = Query(None),
     status_filter: Optional[str] = Query(None, alias="status"),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
     """查询已同步的入仓运单列表（含详情展开）"""
     query = db.query(EmagInboundShipment)
 
+    if shop_id is not None:
+        query = query.filter(EmagInboundShipment.shop_id == shop_id)
     if reception_id is not None:
         query = query.filter(EmagInboundShipment.reception_id == reception_id)
     if status_filter:
@@ -224,8 +231,18 @@ async def sync_ads(
 ):
     """
     启动广告数据三层递归同步（独立线程执行）。
+    自动按 ISO 标准周（周一~周日）切割日期范围，逐周同步。
     Campaign → Adset → Product Performance
     """
+    from datetime import datetime as _dt
+
+    current_shop_id = emag_marketplace_login_service.get_current_shop_id()
+
+    # 预计算周数，用于前端展示
+    ds = _dt.strptime(payload.date_start, "%Y-%m-%d").date()
+    de = _dt.strptime(payload.date_end, "%Y-%m-%d").date()
+    weeks = _split_into_iso_weeks(ds, de)
+    total_weeks = len(weeks)
 
     def _run():
         db = SessionLocal()
@@ -236,6 +253,7 @@ async def sync_ads(
                 date_end=payload.date_end,
                 login_service=emag_marketplace_login_service,
                 marketplace=payload.marketplace,
+                shop_id=current_shop_id,
             )
             logger.info(f"广告数据同步完成: {result}")
         except Exception as e:
@@ -247,8 +265,17 @@ async def sync_ads(
     t.start()
     return {
         "success": True,
-        "message": "广告数据同步已启动，正在后台进行..."
+        "message": f"广告数据同步已启动（共 {total_weeks} 个 ISO 周），正在后台逐周进行...",
+        "total_weeks": total_weeks,
     }
+
+
+@router.get("/ads/sync-progress")
+async def get_ads_sync_progress_api(
+    current_user: dict = Depends(require_auth),
+):
+    """查询广告数据同步进度（前端轮询用）"""
+    return {"success": True, **get_ads_sync_progress()}
 
 
 @router.get("/ads/performance")
@@ -260,6 +287,7 @@ async def get_ads_performance(
     date_start: Optional[str] = Query(None),
     date_end: Optional[str] = Query(None),
     marketplace: Optional[str] = Query(None),  # ro / bg / hu
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
@@ -273,5 +301,6 @@ async def get_ads_performance(
         date_start=date_start,
         date_end=date_end,
         marketplace=marketplace,
+        shop_id=shop_id,
     )
 

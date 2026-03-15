@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.models.emag_sync import EmagAccount, EmagProduct, EmagOrder, EmagReturn
+from app.models.emag_sync import EmagShop, EmagAccount, EmagProduct, EmagOrder, EmagReturn
 from app.services.emag_api_client import EmagAPIClient
 
 logger = logging.getLogger(__name__)
@@ -14,22 +14,36 @@ logger = logging.getLogger(__name__)
 class EmagSyncService:
     """Service for syncing data from eMAG Marketplace API"""
     
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, shop_id: Optional[int] = None):
         self.db = db
+        self.shop_id = shop_id
         self._client: Optional[EmagAPIClient] = None
     
     def _get_client(self) -> EmagAPIClient:
-        """Get or create API client from account configuration"""
+        """Get or create API client from shop or legacy account configuration"""
         if self._client is None:
-            account = self.db.query(EmagAccount).filter(EmagAccount.is_active == 1).first()
-            if not account:
-                raise Exception("No active eMAG account configured")
-            
-            self._client = EmagAPIClient(
-                base_url=account.base_url,
-                username=account.username,
-                password=account.password
-            )
+            # 优先使用 shop_id 获取凭据
+            if self.shop_id:
+                shop = self.db.query(EmagShop).filter(EmagShop.id == self.shop_id).first()
+                if not shop:
+                    raise Exception(f"店铺不存在 (id={self.shop_id})")
+                if not shop.api_username or not shop.api_password:
+                    raise Exception(f"店铺 '{shop.name}' 未配置 API 凭据")
+                self._client = EmagAPIClient(
+                    base_url=shop.api_base_url,
+                    username=shop.api_username,
+                    password=shop.api_password
+                )
+            else:
+                # fallback: 旧的 EmagAccount 表
+                account = self.db.query(EmagAccount).filter(EmagAccount.is_active == 1).first()
+                if not account:
+                    raise Exception("No active eMAG account configured")
+                self._client = EmagAPIClient(
+                    base_url=account.base_url,
+                    username=account.username,
+                    password=account.password
+                )
         
         return self._client
     
@@ -79,7 +93,7 @@ class EmagSyncService:
     
     def sync_products(self) -> Dict[str, Any]:
         """
-        Full sync products (clear old data and re-insert)
+        Full sync products (clear old data for this shop and re-insert)
         
         Returns:
             Dict with sync results: {success: bool, records_count: int, error: str}
@@ -87,9 +101,12 @@ class EmagSyncService:
         try:
             client = self._get_client()
             
-            # Clear old data
-            deleted_count = self.db.query(EmagProduct).delete()
-            logger.info(f"Deleted {deleted_count} old product records")
+            # Clear old data (only for this shop)
+            q = self.db.query(EmagProduct)
+            if self.shop_id:
+                q = q.filter(EmagProduct.shop_id == self.shop_id)
+            deleted_count = q.delete()
+            logger.info(f"Deleted {deleted_count} old product records (shop_id={self.shop_id})")
             
             # Sync all pages
             page = 1
@@ -132,6 +149,7 @@ class EmagSyncService:
                         ean = None
                     
                     product = EmagProduct(
+                        shop_id=self.shop_id,
                         product_id=product_data.get('id'),
                         pnk_code=pnk_code,
                         ean=ean,
@@ -175,7 +193,7 @@ class EmagSyncService:
     
     def sync_orders(self) -> Dict[str, Any]:
         """
-        Full sync orders (clear old data and re-insert)
+        Full sync orders (clear old data for this shop and re-insert)
         
         Returns:
             Dict with sync results: {success: bool, records_count: int, error: str}
@@ -183,9 +201,12 @@ class EmagSyncService:
         try:
             client = self._get_client()
             
-            # Clear old data
-            deleted_count = self.db.query(EmagOrder).delete()
-            logger.info(f"Deleted {deleted_count} old order records")
+            # Clear old data (only for this shop)
+            q = self.db.query(EmagOrder)
+            if self.shop_id:
+                q = q.filter(EmagOrder.shop_id == self.shop_id)
+            deleted_count = q.delete()
+            logger.info(f"Deleted {deleted_count} old order records (shop_id={self.shop_id})")
             
             # Sync all pages
             page = 1
@@ -235,6 +256,7 @@ class EmagSyncService:
                             total_amount = None
                         
                         order = EmagOrder(
+                            shop_id=self.shop_id,
                             order_id=order_id,
                             order_product_id=product_data.get('id'),
                             product_id=product_id,
@@ -288,7 +310,7 @@ class EmagSyncService:
     
     def sync_returns(self) -> Dict[str, Any]:
         """
-        Full sync returns (clear old data and re-insert)
+        Full sync returns (clear old data for this shop and re-insert)
         
         Returns:
             Dict with sync results: {success: bool, records_count: int, error: str}
@@ -296,9 +318,12 @@ class EmagSyncService:
         try:
             client = self._get_client()
             
-            # Clear old data
-            deleted_count = self.db.query(EmagReturn).delete()
-            logger.info(f"Deleted {deleted_count} old return records")
+            # Clear old data (only for this shop)
+            q = self.db.query(EmagReturn)
+            if self.shop_id:
+                q = q.filter(EmagReturn.shop_id == self.shop_id)
+            deleted_count = q.delete()
+            logger.info(f"Deleted {deleted_count} old return records (shop_id={self.shop_id})")
             
             # Sync all pages
             page = 1
@@ -371,6 +396,7 @@ class EmagSyncService:
                     if not products_list:
                         # If no products, create a single record with return-level data
                         return_record = EmagReturn(
+                            shop_id=self.shop_id,
                             rma_id=rma_id,
                             order_id=order_id,
                             order_product_id=None,
@@ -422,6 +448,7 @@ class EmagSyncService:
                                     order_product_id = None
                             
                             return_record = EmagReturn(
+                                shop_id=self.shop_id,
                                 rma_id=rma_id,
                                 order_id=order_id,
                                 order_product_id=order_product_id,

@@ -10,14 +10,46 @@
             </div>
           </template>
 
-          <!-- API授权配置区域 -->
+          <!-- ═══ 店铺选择 ═══ -->
           <el-card shadow="never" class="section-card">
+            <template #header>
+              <div class="card-header">
+                <span>选择店铺</span>
+                <el-button type="primary" size="small" text @click="openShopDialog()">+ 新建</el-button>
+              </div>
+            </template>
+            <el-form label-width="80px" size="small">
+              <el-form-item label="当前店铺">
+                <el-select
+                  v-model="selectedShopId"
+                  placeholder="请先选择店铺"
+                  style="width: 100%"
+                  clearable
+                >
+                  <el-option
+                    v-for="shop in shops"
+                    :key="shop.id"
+                    :label="`${shop.name} (${platformLabels[shop.platform] || shop.platform})`"
+                    :value="shop.id"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item v-if="selectedShop">
+                <el-tag size="small" type="success">{{ selectedShop.name }}</el-tag>
+                <el-button size="small" text type="primary" style="margin-left: 8px" @click="openShopDialog(selectedShop)">编辑</el-button>
+                <el-button size="small" text type="danger" @click="handleDeleteShop(selectedShop)">删除</el-button>
+              </el-form-item>
+            </el-form>
+          </el-card>
+
+          <!-- ═══ API授权配置区域 ═══ -->
+          <el-card shadow="never" class="section-card" style="margin-top: 20px">
             <template #header>
               <span>API授权配置</span>
             </template>
             <el-form :model="accountForm" label-width="80px" size="small">
               <el-form-item label="平台">
-                <el-select v-model="accountForm.platform" placeholder="选择平台" style="width: 100%">
+                <el-select v-model="accountForm.platform" placeholder="选择平台" style="width: 100%" disabled>
                   <el-option label="eMAG Romania" value="ro" />
                   <el-option label="eMAG Bulgaria" value="bg" />
                   <el-option label="eMAG Hungary" value="hu" />
@@ -26,10 +58,10 @@
                 </el-select>
               </el-form-item>
               <el-form-item label="用户名">
-                <el-input v-model="accountForm.username" placeholder="API用户名" />
+                <el-input v-model="accountForm.username" placeholder="API用户名（从店铺自动填充）" />
               </el-form-item>
               <el-form-item label="密码">
-                <el-input v-model="accountForm.password" type="password" placeholder="API密码" show-password />
+                <el-input v-model="accountForm.password" type="password" placeholder="API密码（从店铺自动填充）" show-password />
               </el-form-item>
               <el-form-item>
                 <el-button type="primary" @click="testConnection" :loading="testingConnection" size="small">
@@ -58,19 +90,51 @@
             <el-form :model="marketplaceLoginForm" label-width="80px" size="small">
               <el-alert
                 v-if="marketplaceStatus === 'waiting_manual_login'"
+                type="warning"
+                :closable="false"
+                style="margin-bottom: 15px"
+              >
+                <template #title>
+                  <div>
+                    <strong>自动填充失败，请在弹出的浏览器窗口中手动完成登录</strong>
+                    <div style="margin-top: 5px; font-size: 12px">
+                      用户名密码可能已预填，请检查并点击提交
+                    </div>
+                  </div>
+                </template>
+              </el-alert>
+              <el-alert
+                v-if="marketplaceStatus === 'auto_filling'"
                 type="info"
                 :closable="false"
                 style="margin-bottom: 15px"
               >
                 <template #title>
                   <div>
-                    <strong>请在弹出的浏览器窗口中手动完成登录</strong>
+                    <strong>正在自动填充登录信息...</strong>
                     <div style="margin-top: 5px; font-size: 12px">
-                      包括输入用户名、密码和处理验证码（如需要）
+                      后台正在自动填写用户名密码并提交，请稍候
                     </div>
                   </div>
                 </template>
               </el-alert>
+              <el-form-item label="邮箱">
+                <el-input
+                  v-model="marketplaceLoginForm.username"
+                  placeholder="eMAG 登录邮箱（从店铺自动填充）"
+                  :disabled="marketplaceLoggingIn || marketplaceStatus === 'logged_in'"
+                />
+              </el-form-item>
+              <el-form-item label="密码">
+                <el-input
+                  v-model="marketplaceLoginForm.password"
+                  type="password"
+                  placeholder="eMAG 登录密码（从店铺自动填充）"
+                  show-password
+                  :disabled="marketplaceLoggingIn || marketplaceStatus === 'logged_in'"
+                  @keyup.enter="handleMarketplaceLogin"
+                />
+              </el-form-item>
               <el-form-item label="状态">
                 <el-tag :type="marketplaceStatusTagType" size="small">
                   {{ marketplaceStatusText }}
@@ -81,6 +145,7 @@
                   type="primary"
                   size="small"
                   :loading="marketplaceLoggingIn"
+                  :disabled="!marketplaceLoginForm.username || !marketplaceLoginForm.password"
                   @click="handleMarketplaceLogin"
                 >
                   登录后台
@@ -210,6 +275,38 @@
                 >
                   同步广告数据 ({{ adsSyncMarketplace.toUpperCase() }})
                 </el-button>
+              </el-form-item>
+              <!-- 进度展示 -->
+              <el-form-item v-if="adsSyncProgress.running || adsSyncProgress.finished">
+                <div style="width: 100%">
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 12px; color: #606266">
+                    <span v-if="adsSyncProgress.running">
+                      正在同步第 {{ adsSyncProgress.current_week }} / {{ adsSyncProgress.total_weeks }} 周
+                    </span>
+                    <span v-else-if="adsSyncProgress.finished" style="color: #67c23a">
+                      ✅ 全部 {{ adsSyncProgress.total_weeks }} 周同步完成
+                    </span>
+                    <span v-if="adsSyncProgress.current_week_label && adsSyncProgress.running" style="color: #409eff">
+                      {{ adsSyncProgress.current_week_label }}
+                    </span>
+                  </div>
+                  <el-progress
+                    :percentage="adsSyncProgressPercent"
+                    :status="adsSyncProgress.finished ? 'success' : ''"
+                    :stroke-width="18"
+                    :text-inside="true"
+                  />
+                  <!-- 已完成周的简略统计 -->
+                  <div v-if="adsSyncProgress.completed_weeks && adsSyncProgress.completed_weeks.length > 0"
+                       style="margin-top: 8px; max-height: 120px; overflow-y: auto; font-size: 11px; color: #909399; line-height: 1.8"
+                  >
+                    <div v-for="(w, wi) in adsSyncProgress.completed_weeks" :key="wi">
+                      <el-tag size="small" type="success" style="margin-right: 4px">✓</el-tag>
+                      {{ w.week }} — {{ w.campaigns }} 活动, {{ w.adsets }} 广告组, {{ w.products }} 产品
+                      <span v-if="w.errors_count > 0" style="color: #f56c6c">({{ w.errors_count }} 错误)</span>
+                    </div>
+                  </div>
+                </div>
               </el-form-item>
               <el-form-item v-if="adsSyncMessage">
                 <el-alert :type="adsSyncMessageType" :closable="false" show-icon>
@@ -658,20 +755,91 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- ═══ 新建/编辑店铺对话框 ═══ -->
+    <el-dialog
+      v-model="showShopDialog"
+      :title="editingShop ? '编辑店铺' : '新建店铺'"
+      width="500px"
+      destroy-on-close
+    >
+      <el-form :model="shopForm" label-width="100px" size="small">
+        <el-form-item label="店铺名称" required>
+          <el-input v-model="shopForm.name" placeholder="如：RO主店、BG测试店" />
+        </el-form-item>
+        <el-form-item label="平台" required>
+          <el-select v-model="shopForm.platform" style="width: 100%">
+            <el-option label="eMAG Romania" value="ro" />
+            <el-option label="eMAG Bulgaria" value="bg" />
+            <el-option label="eMAG Hungary" value="hu" />
+            <el-option label="Fashion Days RO" value="fashiondays-ro" />
+            <el-option label="Fashion Days BG" value="fashiondays-bg" />
+          </el-select>
+        </el-form-item>
+        <el-divider content-position="left">API 授权凭据</el-divider>
+        <el-form-item label="API 用户名">
+          <el-input v-model="shopForm.api_username" placeholder="Marketplace API 用户名" />
+        </el-form-item>
+        <el-form-item label="API 密码">
+          <el-input v-model="shopForm.api_password" type="password" show-password :placeholder="editingShop ? '留空则不修改' : 'Marketplace API 密码'" />
+        </el-form-item>
+        <el-divider content-position="left">后台登录凭据</el-divider>
+        <el-form-item label="登录邮箱">
+          <el-input v-model="shopForm.login_email" placeholder="卖家中心登录邮箱" />
+        </el-form-item>
+        <el-form-item label="登录密码">
+          <el-input v-model="shopForm.login_password" type="password" show-password :placeholder="editingShop ? '留空则不修改' : '卖家中心登录密码'" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showShopDialog = false" size="small">取消</el-button>
+        <el-button type="primary" @click="handleSaveShop" :loading="savingShop" size="small">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { emagSyncApi } from '@/api/emagSync'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 
-// Account form
+// ── 店铺管理 ──
+const shops = ref([])
+const showShopDialog = ref(false)
+const editingShop = ref(null)  // null = 新建, object = 编辑
+const shopForm = reactive({
+  name: '',
+  platform: 'ro',
+  api_username: '',
+  api_password: '',
+  login_email: '',
+  login_password: ''
+})
+const savingShop = ref(false)
+
+// 当前选中的店铺（用于 API 授权 & 后台登录 & 同步 & 数据查询）
+const selectedShopId = ref(null)
+
+const selectedShop = computed(() => {
+  if (!selectedShopId.value) return null
+  return shops.value.find(s => s.id === selectedShopId.value) || null
+})
+
+const platformLabels = {
+  'ro': 'eMAG Romania',
+  'bg': 'eMAG Bulgaria',
+  'hu': 'eMAG Hungary',
+  'fashiondays-ro': 'Fashion Days RO',
+  'fashiondays-bg': 'Fashion Days BG'
+}
+
+// Account form (legacy, keep for backward compat)
 const accountForm = reactive({
   platform: 'ro',
-  username: 'sea403464507@gmail.com',
-  password: 'g6jYDh0'
+  username: '',
+  password: ''
 })
 
 const accountStatus = ref(null)
@@ -710,6 +878,22 @@ const adsDateRange = ref(null)
 const syncingAds = ref(false)
 const adsSyncMessage = ref('')
 const adsSyncMessageType = ref('info')
+let adsSyncProgressTimer = null
+const adsSyncProgress = ref({
+  running: false,
+  total_weeks: 0,
+  current_week: 0,
+  current_week_label: '',
+  completed_weeks: [],
+  errors: [],
+  finished: false,
+  summary: null,
+})
+const adsSyncProgressPercent = computed(() => {
+  const p = adsSyncProgress.value
+  if (!p.total_weeks) return 0
+  return Math.round((p.current_week / p.total_weeks) * 100)
+})
 
 // Ads data display
 const adsPerformance = ref([])
@@ -725,6 +909,7 @@ const adsTotal = ref(0)
 const marketplaceStatusTagType = computed(() => {
   if (marketplaceStatus.value === 'logged_in') return 'success'
   if (marketplaceStatus.value === 'logging_in') return 'warning'
+  if (marketplaceStatus.value === 'auto_filling') return 'warning'
   if (marketplaceStatus.value === 'waiting_manual_login') return 'warning'
   if (marketplaceStatus.value === 'captcha_required') return 'warning'
   if (marketplaceStatus.value === 'sms_verification_required') return 'warning'
@@ -736,7 +921,8 @@ const marketplaceStatusText = computed(() => {
   const map = {
     not_logged_in: '未登录',
     logging_in: '登录中...',
-    waiting_manual_login: '等待手动登录',
+    auto_filling: '正在自动填充...',
+    waiting_manual_login: '等待手动登录（请查看弹窗）',
     captcha_required: '需要图形验证码',
     sms_verification_required: '需要手机验证码',
     logged_in: '已登录',
@@ -781,6 +967,98 @@ const shipmentSearch = ref('')
 const shipmentPage = ref(1)
 const shipmentPageSize = ref(50)
 const shipmentTotal = ref(0)
+
+// ── 店铺 CRUD ──
+const loadShops = async () => {
+  try {
+    const res = await emagSyncApi.getShops()
+    shops.value = res || []
+  } catch (e) {
+    shops.value = []
+  }
+}
+
+const openShopDialog = (shop = null) => {
+  editingShop.value = shop
+  if (shop) {
+    shopForm.name = shop.name
+    shopForm.platform = shop.platform
+    shopForm.api_username = shop.api_username || ''
+    shopForm.api_password = ''
+    shopForm.login_email = shop.login_email || ''
+    shopForm.login_password = ''
+  } else {
+    shopForm.name = ''
+    shopForm.platform = 'ro'
+    shopForm.api_username = ''
+    shopForm.api_password = ''
+    shopForm.login_email = ''
+    shopForm.login_password = ''
+  }
+  showShopDialog.value = true
+}
+
+const handleSaveShop = async () => {
+  if (!shopForm.name) { ElMessage.warning('请输入店铺名称'); return }
+  savingShop.value = true
+  try {
+    if (editingShop.value) {
+      // 更新 - 只传有值的字段
+      const payload = { name: shopForm.name, platform: shopForm.platform }
+      if (shopForm.api_username) payload.api_username = shopForm.api_username
+      if (shopForm.api_password) payload.api_password = shopForm.api_password
+      if (shopForm.login_email) payload.login_email = shopForm.login_email
+      if (shopForm.login_password) payload.login_password = shopForm.login_password
+      await emagSyncApi.updateShop(editingShop.value.id, payload)
+      ElMessage.success('店铺已更新')
+    } else {
+      await emagSyncApi.createShop(shopForm)
+      ElMessage.success('店铺已创建')
+    }
+    showShopDialog.value = false
+    await loadShops()
+  } catch (e) {
+    ElMessage.error('保存店铺失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    savingShop.value = false
+  }
+}
+
+const handleDeleteShop = async (shop) => {
+  try {
+    await ElMessageBox.confirm(`确定删除店铺「${shop.name}」？`, '确认删除', { type: 'warning' })
+    await emagSyncApi.deleteShop(shop.id)
+    ElMessage.success('店铺已删除')
+    if (selectedShopId.value === shop.id) selectedShopId.value = null
+    await loadShops()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+// 选择店铺后自动填充凭据
+const onShopSelected = async (shopId) => {
+  if (!shopId) {
+    accountForm.username = ''
+    accountForm.password = ''
+    accountForm.platform = 'ro'
+    marketplaceLoginForm.username = ''
+    marketplaceLoginForm.password = ''
+    return
+  }
+  try {
+    const cred = await emagSyncApi.getShopCredentials(shopId)
+    if (cred) {
+      accountForm.platform = cred.platform || 'ro'
+      accountForm.username = cred.api_username || ''
+      accountForm.password = cred.api_password || ''
+      marketplaceLoginForm.username = cred.login_email || ''
+      marketplaceLoginForm.password = cred.login_password || ''
+    }
+  } catch (e) {
+    // ignore
+  }
+}
 
 // Methods
 const addLog = (type, message) => {
@@ -949,12 +1227,15 @@ const updateMarketplaceStateFromResponse = (res, showMessage = true) => {
     ElMessage.success('后台登录成功')
     addLog('success', '后台登录成功')
     marketplaceSmsCode.value = '' // 清空验证码
+  } else if (marketplaceStatus.value === 'auto_filling' && showMessage) {
+    ElMessage.info('正在自动填充用户名密码...')
+    addLog('info', '正在自动填充登录信息')
   } else if (marketplaceStatus.value === 'logging_in' && showMessage) {
     ElMessage.info('登录已启动，正在后台进行中...')
     addLog('info', '后台登录已在后台启动')
   } else if (marketplaceStatus.value === 'waiting_manual_login' && showMessage) {
-    ElMessage.info('请在弹出的浏览器窗口中手动完成登录（包括输入用户名、密码和处理验证码）')
-    addLog('info', '等待手动登录')
+    ElMessage.warning('自动填充失败，请在弹出的浏览器窗口中手动完成')
+    addLog('warning', '自动填充失败，等待手动登录')
   } else if (marketplaceStatus.value === 'sms_verification_required' && showMessage) {
     ElMessage.warning('需要输入手机验证码')
     addLog('warning', '需要输入手机验证码')
@@ -975,10 +1256,11 @@ const pollMarketplaceStatusOnce = async () => {
 
 const startMarketplaceStatusPolling = () => {
   if (marketplaceStatusTimer) return
+  const pollingStates = ['logging_in', 'auto_filling', 'waiting_manual_login']
   marketplaceStatusTimer = setInterval(async () => {
-    if (marketplaceStatus.value === 'logging_in' || marketplaceStatus.value === 'waiting_manual_login') {
+    if (pollingStates.includes(marketplaceStatus.value)) {
       await pollMarketplaceStatusOnce()
-      if (marketplaceStatus.value !== 'logging_in' && marketplaceStatus.value !== 'waiting_manual_login') {
+      if (!pollingStates.includes(marketplaceStatus.value)) {
         // 登录已结束，自动停轮询
         stopMarketplaceStatusPolling()
       }
@@ -996,23 +1278,29 @@ const stopMarketplaceStatusPolling = () => {
 }
 
 const handleMarketplaceLogin = async () => {
-  // 手动登录方式，不需要用户名密码（但保留输入框以兼容）
-  // 如果已经在登录中，防止重复点击
-  if (marketplaceStatus.value === 'logging_in' || marketplaceStatus.value === 'waiting_manual_login' || marketplaceLoggingIn.value) {
+  // 防止重复点击
+  const busyStates = ['logging_in', 'auto_filling', 'waiting_manual_login']
+  if (busyStates.includes(marketplaceStatus.value) || marketplaceLoggingIn.value) {
     ElMessage.info('登录正在进行中，请稍候...')
+    return
+  }
+  // 校验用户名密码
+  if (!marketplaceLoginForm.username || !marketplaceLoginForm.password) {
+    ElMessage.warning('请输入 eMAG 登录邮箱和密码')
     return
   }
   marketplaceLoggingIn.value = true
   marketplaceStatus.value = 'logging_in'
   try {
-    // 手动登录方式，用户名密码可选
     const res = await emagSyncApi.marketplaceLogin({
-      username: marketplaceLoginForm.username || '',
-      password: marketplaceLoginForm.password || ''
+      username: marketplaceLoginForm.username,
+      password: marketplaceLoginForm.password,
+      shop_id: selectedShopId.value || null
     })
     updateMarketplaceStateFromResponse(res, true)
-    // 如果返回的状态是 logging_in 或 waiting_manual_login，开启轮询
-    if (marketplaceStatus.value === 'logging_in' || marketplaceStatus.value === 'waiting_manual_login') {
+    // 在这些状态下开启轮询
+    const pollingStates = ['logging_in', 'auto_filling', 'waiting_manual_login']
+    if (pollingStates.includes(marketplaceStatus.value)) {
       startMarketplaceStatusPolling()
     }
   } catch (error) {
@@ -1120,10 +1408,21 @@ const handleSyncAds = async () => {
   }
 
   syncingAds.value = true
+  // 重置进度
+  adsSyncProgress.value = {
+    running: false,
+    total_weeks: 0,
+    current_week: 0,
+    current_week_label: '',
+    completed_weeks: [],
+    errors: [],
+    finished: false,
+    summary: null,
+  }
   const mpLabel = adsSyncMarketplace.value.toUpperCase()
-  adsSyncMessage.value = `正在同步 ${mpLabel} 广告数据（Campaign → 广告组 → 产品），请稍候...`
+  adsSyncMessage.value = `正在按 ISO 周切割日期范围并同步 ${mpLabel} 广告数据，请稍候...`
   adsSyncMessageType.value = 'info'
-  addLog('info', `开始同步 ${mpLabel} 广告数据 ${adsDateRange.value[0]} ~ ${adsDateRange.value[1]}`)
+  addLog('info', `开始同步 ${mpLabel} 广告数据 ${adsDateRange.value[0]} ~ ${adsDateRange.value[1]}（自动按 ISO 周切割）`)
 
   try {
     const res = await emagSyncApi.syncAds({
@@ -1132,11 +1431,13 @@ const handleSyncAds = async () => {
       marketplace: adsSyncMarketplace.value
     })
     if (res?.success) {
-      ElMessage.success('广告数据同步已启动，正在后台进行...')
-      adsSyncMessage.value = '同步任务已启动，数据量较大时可能需要几分钟，完成后切换到"广告数据"标签查看'
-      adsSyncMessageType.value = 'success'
-      addLog('info', '广告数据同步已在后台启动')
-      setTimeout(() => { syncingAds.value = false }, 5000)
+      const totalWeeks = res.total_weeks || '?'
+      ElMessage.success(`广告数据同步已启动（共 ${totalWeeks} 个 ISO 周），正在后台逐周进行...`)
+      adsSyncMessage.value = `同步任务已启动（共 ${totalWeeks} 个 ISO 周），正在逐周拉取数据...`
+      adsSyncMessageType.value = 'info'
+      addLog('info', `广告数据同步已在后台启动，共 ${totalWeeks} 个 ISO 周`)
+      // 启动进度轮询
+      startAdsSyncProgressPolling()
     } else {
       ElMessage.error('广告同步启动失败: ' + (res?.error || '未知错误'))
       adsSyncMessage.value = '同步启动失败'
@@ -1152,6 +1453,51 @@ const handleSyncAds = async () => {
   }
 }
 
+const startAdsSyncProgressPolling = () => {
+  stopAdsSyncProgressPolling()
+  adsSyncProgressTimer = setInterval(async () => {
+    try {
+      const res = await emagSyncApi.getAdsSyncProgress()
+      if (res) {
+        adsSyncProgress.value = {
+          running: res.running ?? false,
+          total_weeks: res.total_weeks ?? 0,
+          current_week: res.current_week ?? 0,
+          current_week_label: res.current_week_label ?? '',
+          completed_weeks: res.completed_weeks ?? [],
+          errors: res.errors ?? [],
+          finished: res.finished ?? false,
+          summary: res.summary ?? null,
+        }
+        // 同步完成时停止轮询
+        if (res.finished) {
+          stopAdsSyncProgressPolling()
+          syncingAds.value = false
+          const s = res.summary
+          if (s && !s.error) {
+            adsSyncMessage.value = `同步完成: ${s.campaigns || 0} 活动, ${s.adsets || 0} 广告组, ${s.products || 0} 产品, ${(s.errors || []).length} 错误`
+            adsSyncMessageType.value = (s.errors || []).length > 0 ? 'warning' : 'success'
+            addLog('success', `广告数据同步全部完成 (${res.total_weeks} 周)`)
+          } else if (s && s.error) {
+            adsSyncMessage.value = '同步失败: ' + s.error
+            adsSyncMessageType.value = 'error'
+            addLog('error', '广告数据同步失败: ' + s.error)
+          }
+        }
+      }
+    } catch (e) {
+      // 忽略单次轮询错误
+    }
+  }, 3000)
+}
+
+const stopAdsSyncProgressPolling = () => {
+  if (adsSyncProgressTimer) {
+    clearInterval(adsSyncProgressTimer)
+    adsSyncProgressTimer = null
+  }
+}
+
 const loadAdsPerformance = async () => {
   loadingAds.value = true
   try {
@@ -1159,6 +1505,7 @@ const loadAdsPerformance = async () => {
       skip: (adsPage.value - 1) * adsPageSize.value,
       limit: adsPageSize.value
     }
+    if (selectedShopId.value) params.shop_id = selectedShopId.value
     if (adsFilterMarketplace.value) {
       params.marketplace = adsFilterMarketplace.value
     }
@@ -1192,8 +1539,7 @@ const syncProducts = async () => {
   syncingProducts.value = true
   addLog('info', '开始同步产品...')
   try {
-    const response = await emagSyncApi.syncProducts()
-    // Fix: axios interceptor returns response.data, so access response.success directly
+    const response = await emagSyncApi.syncProducts(selectedShopId.value)
     // Handle background task response
     if (response?.success) {
       if (response?.message && response.message.includes('background')) {
@@ -1226,8 +1572,7 @@ const syncOrders = async () => {
   syncingOrders.value = true
   addLog('info', '开始同步订单...')
   try {
-    const response = await emagSyncApi.syncOrders()
-    // Fix: axios interceptor returns response.data, so access response.success directly
+    const response = await emagSyncApi.syncOrders(selectedShopId.value)
     // Handle background task response
     if (response?.success) {
       if (response?.message && response.message.includes('background')) {
@@ -1264,8 +1609,7 @@ const syncReturns = async () => {
   syncingReturns.value = true
   addLog('info', '开始同步退货...')
   try {
-    const response = await emagSyncApi.syncReturns()
-    // Fix: axios interceptor returns response.data, so access response.success directly
+    const response = await emagSyncApi.syncReturns(selectedShopId.value)
     // Handle background task response
     if (response?.success) {
       if (response?.message && response.message.includes('background')) {
@@ -1298,8 +1642,7 @@ const syncAll = async () => {
   syncingAll.value = true
   addLog('info', '开始同步全部数据...')
   try {
-    const response = await emagSyncApi.syncAll()
-    // Fix: axios interceptor returns response.data, so access response.success directly
+    const response = await emagSyncApi.syncAll(selectedShopId.value)
     // Handle background task response
     if (response?.success) {
       if (response?.message && response.message.includes('background')) {
@@ -1342,8 +1685,8 @@ const loadProducts = async () => {
       skip: (productPage.value - 1) * productPageSize.value,
       limit: productPageSize.value
     }
+    if (selectedShopId.value) params.shop_id = selectedShopId.value
     if (productSearch.value) {
-      // Try PNK first, then EAN
       params.pnk_code = productSearch.value
     }
     const response = await emagSyncApi.getProducts(params)
@@ -1368,6 +1711,7 @@ const loadOrders = async () => {
       skip: (orderPage.value - 1) * orderPageSize.value,
       limit: orderPageSize.value
     }
+    if (selectedShopId.value) params.shop_id = selectedShopId.value
     if (orderSearch.value) {
       params.pnk_code = orderSearch.value
     }
@@ -1397,6 +1741,7 @@ const loadReturns = async () => {
       skip: (returnPage.value - 1) * returnPageSize.value,
       limit: returnPageSize.value
     }
+    if (selectedShopId.value) params.shop_id = selectedShopId.value
     if (returnSearch.value) {
       params.pnk_code = returnSearch.value
     }
@@ -1426,6 +1771,7 @@ const loadShipments = async () => {
       skip: (shipmentPage.value - 1) * shipmentPageSize.value,
       limit: shipmentPageSize.value
     }
+    if (selectedShopId.value) params.shop_id = selectedShopId.value
     if (shipmentSearch.value) {
       const parsed = parseInt(shipmentSearch.value, 10)
       if (!isNaN(parsed)) {
@@ -1461,12 +1807,21 @@ const handleTabChange = (tabName) => {
 }
 
 onMounted(async () => {
+  await loadShops()
   await loadAccountStatus()
   await loadProducts()
 })
 
+// 切换店铺时重新加载数据
+watch(selectedShopId, (newVal) => {
+  onShopSelected(newVal)
+  // 重新加载当前 tab 数据
+  handleTabChange(activeTab.value)
+})
+
 onUnmounted(() => {
   stopMarketplaceStatusPolling()
+  stopAdsSyncProgressPolling()
 })
 </script>
 
