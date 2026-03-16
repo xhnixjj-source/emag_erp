@@ -383,7 +383,7 @@
           <el-tabs v-model="activeTab" @tab-change="handleTabChange">
             <!-- 产品库存标签 -->
             <el-tab-pane label="产品库存" name="products">
-              <div style="margin-bottom: 15px">
+              <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
                 <el-input
                   v-model="productSearch"
                   placeholder="搜索PNK或EAN"
@@ -395,6 +395,9 @@
                     <el-icon><Search /></el-icon>
                   </template>
                 </el-input>
+                <el-button type="primary" :icon="Download" @click="handleExportProducts" :loading="exportingProducts">
+                  导出 CSV
+                </el-button>
               </div>
               <el-table
                 :data="products"
@@ -435,29 +438,34 @@
 
             <!-- 订单列表标签 -->
             <el-tab-pane label="订单列表" name="orders">
-              <div style="margin-bottom: 15px">
-                <el-input
-                  v-model="orderSearch"
-                  placeholder="搜索PNK或EAN"
-                  style="width: 300px; margin-right: 10px"
-                  clearable
-                  @input="loadOrders"
-                >
-                  <template #prefix>
-                    <el-icon><Search /></el-icon>
-                  </template>
-                </el-input>
-                <el-date-picker
-                  v-model="orderDateRange"
-                  type="datetimerange"
-                  range-separator="至"
-                  start-placeholder="开始日期"
-                  end-placeholder="结束日期"
-                  format="YYYY-MM-DD HH:mm:ss"
-                  value-format="YYYY-MM-DDTHH:mm:ss"
-                  style="width: 350px"
-                  @change="loadOrders"
-                />
+              <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <el-input
+                    v-model="orderSearch"
+                    placeholder="搜索PNK或EAN"
+                    style="width: 300px; margin-right: 10px"
+                    clearable
+                    @input="loadOrders"
+                  >
+                    <template #prefix>
+                      <el-icon><Search /></el-icon>
+                    </template>
+                  </el-input>
+                  <el-date-picker
+                    v-model="orderDateRange"
+                    type="datetimerange"
+                    range-separator="至"
+                    start-placeholder="开始日期"
+                    end-placeholder="结束日期"
+                    format="YYYY-MM-DD HH:mm:ss"
+                    value-format="YYYY-MM-DDTHH:mm:ss"
+                    style="width: 350px"
+                    @change="loadOrders"
+                  />
+                </div>
+                <el-button type="primary" :icon="Download" @click="handleExportOrders" :loading="exportingOrders">
+                  导出 CSV
+                </el-button>
               </div>
               <el-table
                 :data="orders"
@@ -508,29 +516,34 @@
 
             <!-- 退货列表标签 -->
             <el-tab-pane label="退货列表" name="returns">
-              <div style="margin-bottom: 15px">
-                <el-input
-                  v-model="returnSearch"
-                  placeholder="搜索PNK或EAN"
-                  style="width: 300px; margin-right: 10px"
-                  clearable
-                  @input="loadReturns"
-                >
-                  <template #prefix>
-                    <el-icon><Search /></el-icon>
-                  </template>
-                </el-input>
-                <el-date-picker
-                  v-model="returnDateRange"
-                  type="datetimerange"
-                  range-separator="至"
-                  start-placeholder="开始日期"
-                  end-placeholder="结束日期"
-                  format="YYYY-MM-DD HH:mm:ss"
-                  value-format="YYYY-MM-DDTHH:mm:ss"
-                  style="width: 350px"
-                  @change="loadReturns"
-                />
+              <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <el-input
+                    v-model="returnSearch"
+                    placeholder="搜索PNK或EAN"
+                    style="width: 300px; margin-right: 10px"
+                    clearable
+                    @input="loadReturns"
+                  >
+                    <template #prefix>
+                      <el-icon><Search /></el-icon>
+                    </template>
+                  </el-input>
+                  <el-date-picker
+                    v-model="returnDateRange"
+                    type="datetimerange"
+                    range-separator="至"
+                    start-placeholder="开始日期"
+                    end-placeholder="结束日期"
+                    format="YYYY-MM-DD HH:mm:ss"
+                    value-format="YYYY-MM-DDTHH:mm:ss"
+                    style="width: 350px"
+                    @change="loadReturns"
+                  />
+                </div>
+                <el-button type="primary" :icon="Download" @click="handleExportReturns" :loading="exportingReturns">
+                  导出 CSV
+                </el-button>
               </div>
               <el-table
                 :data="returns"
@@ -572,18 +585,28 @@
 
             <!-- 发货单列表 -->
             <el-tab-pane label="发货单" name="shipments">
-              <div style="margin-bottom: 15px">
-                <el-input
-                  v-model="shipmentSearch"
-                  placeholder="搜索运单号"
-                  style="width: 300px; margin-right: 10px"
-                  clearable
-                  @input="loadShipments"
-                >
-                  <template #prefix>
-                    <el-icon><Search /></el-icon>
-                  </template>
-                </el-input>
+              <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <el-input
+                    v-model="shipmentSearch"
+                    placeholder="搜索运单号"
+                    style="width: 300px; margin-right: 10px"
+                    clearable
+                    @input="loadShipments"
+                  >
+                    <template #prefix>
+                      <el-icon><Search /></el-icon>
+                    </template>
+                  </el-input>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                  <el-button type="primary" :icon="Download" @click="handleExportShipmentsSummary" :loading="exportingShipmentsSummary">
+                    导出运单总表
+                  </el-button>
+                  <el-button type="warning" :icon="Download" @click="handleExportShipmentsDetails" :loading="exportingShipmentsDetails">
+                    导出产品上架明细
+                  </el-button>
+                </div>
               </div>
               <el-table
                 :data="shipments"
@@ -626,7 +649,8 @@
                   </template>
                 </el-table-column>
                 <el-table-column prop="detail_count" label="SKU 行数" width="100" />
-                <el-table-column prop="total_quantity" label="总入库数" width="100" />
+                <el-table-column prop="number_of_units" label="总申请数" width="100" />
+                <el-table-column prop="total_quantity" label="实际入库数" width="100" />
                 <el-table-column prop="synced_at" label="同步时间" width="180">
                   <template #default="{ row }">
                     {{ formatDateTime(row.synced_at) }}
@@ -652,43 +676,48 @@
 
             <!-- 广告数据 -->
             <el-tab-pane label="广告数据" name="ads">
-              <div style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
-                <el-select
-                  v-model="adsFilterMarketplace"
-                  placeholder="全部站点"
-                  style="width: 150px"
-                  clearable
-                  @change="loadAdsPerformance"
-                >
-                  <el-option label="RO" value="ro" />
-                  <el-option label="BG" value="bg" />
-                  <el-option label="HU" value="hu" />
-                </el-select>
-                <el-date-picker
-                  v-model="adsFilterDateRange"
-                  type="daterange"
-                  range-separator="至"
-                  start-placeholder="开始日期"
-                  end-placeholder="结束日期"
-                  format="YYYY-MM-DD"
-                  value-format="YYYY-MM-DD"
-                  style="width: 300px"
-                  @change="loadAdsPerformance"
-                />
-                <el-input
-                  v-model="adsSearchCampaignId"
-                  placeholder="Campaign ID"
-                  style="width: 150px"
-                  clearable
-                  @input="loadAdsPerformance"
-                />
-                <el-input
-                  v-model="adsSearchAdsetId"
-                  placeholder="Adset ID"
-                  style="width: 150px"
-                  clearable
-                  @input="loadAdsPerformance"
-                />
+              <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+                  <el-select
+                    v-model="adsFilterMarketplace"
+                    placeholder="全部站点"
+                    style="width: 150px"
+                    clearable
+                    @change="loadAdsPerformance"
+                  >
+                    <el-option label="RO" value="ro" />
+                    <el-option label="BG" value="bg" />
+                    <el-option label="HU" value="hu" />
+                  </el-select>
+                  <el-date-picker
+                    v-model="adsFilterDateRange"
+                    type="daterange"
+                    range-separator="至"
+                    start-placeholder="开始日期"
+                    end-placeholder="结束日期"
+                    format="YYYY-MM-DD"
+                    value-format="YYYY-MM-DD"
+                    style="width: 300px"
+                    @change="loadAdsPerformance"
+                  />
+                  <el-input
+                    v-model="adsSearchCampaignId"
+                    placeholder="Campaign ID"
+                    style="width: 150px"
+                    clearable
+                    @input="loadAdsPerformance"
+                  />
+                  <el-input
+                    v-model="adsSearchAdsetId"
+                    placeholder="Adset ID"
+                    style="width: 150px"
+                    clearable
+                    @input="loadAdsPerformance"
+                  />
+                </div>
+                <el-button type="primary" :icon="Download" @click="handleExportAds" :loading="exportingAds">
+                  导出 CSV
+                </el-button>
               </div>
               <el-table
                 :data="adsPerformance"
@@ -803,7 +832,7 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { emagSyncApi } from '@/api/emagSync'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
+import { Search, Download } from '@element-plus/icons-vue'
 
 // ── 店铺管理 ──
 const shops = ref([])
@@ -898,6 +927,7 @@ const adsSyncProgressPercent = computed(() => {
 // Ads data display
 const adsPerformance = ref([])
 const loadingAds = ref(false)
+const exportingAds = ref(false)
 const adsFilterMarketplace = ref('')  // filter: '' = all
 const adsFilterDateRange = ref(null)
 const adsSearchCampaignId = ref('')
@@ -937,6 +967,7 @@ const activeTab = ref('products')
 // Products data
 const products = ref([])
 const loadingProducts = ref(false)
+const exportingProducts = ref(false)
 const productSearch = ref('')
 const productPage = ref(1)
 const productPageSize = ref(100)
@@ -945,6 +976,7 @@ const productTotal = ref(0)
 // Orders data
 const orders = ref([])
 const loadingOrders = ref(false)
+const exportingOrders = ref(false)
 const orderSearch = ref('')
 const orderDateRange = ref(null)
 const orderPage = ref(1)
@@ -954,6 +986,7 @@ const orderTotal = ref(0)
 // Returns data
 const returns = ref([])
 const loadingReturns = ref(false)
+const exportingReturns = ref(false)
 const returnSearch = ref('')
 const returnDateRange = ref(null)
 const returnPage = ref(1)
@@ -963,6 +996,8 @@ const returnTotal = ref(0)
 // Inbound shipments data
 const shipments = ref([])
 const loadingShipments = ref(false)
+const exportingShipmentsSummary = ref(false)
+const exportingShipmentsDetails = ref(false)
 const shipmentSearch = ref('')
 const shipmentPage = ref(1)
 const shipmentPageSize = ref(50)
@@ -1498,6 +1533,19 @@ const stopAdsSyncProgressPolling = () => {
   }
 }
 
+const handleExportAds = () => {
+  const params = {}
+  if (selectedShopId.value) params.shop_id = selectedShopId.value
+  if (adsFilterMarketplace.value) params.marketplace = adsFilterMarketplace.value
+  if (adsSearchCampaignId.value) params.campaign_id = adsSearchCampaignId.value
+  if (adsSearchAdsetId.value) params.adset_id = adsSearchAdsetId.value
+  if (adsFilterDateRange.value && adsFilterDateRange.value.length === 2) {
+    params.date_start = adsFilterDateRange.value[0]
+    params.date_end = adsFilterDateRange.value[1]
+  }
+  handleDownloadCSV(emagSyncApi.exportAdsPerformance, params, `ads_performance_${Date.now()}.csv`, exportingAds)
+}
+
 const loadAdsPerformance = async () => {
   loadingAds.value = true
   try {
@@ -1678,6 +1726,36 @@ const syncAll = async () => {
   }
 }
 
+// === Export Helper ===
+const handleDownloadCSV = async (apiCall, params, defaultFilename, loadingRef) => {
+  loadingRef.value = true
+  try {
+    const res = await apiCall(params)
+    // Axios response interceptor might return res.data directly, which is a Blob
+    const blob = res instanceof Blob ? res : new Blob([res], { type: 'text/csv;charset=utf-8' })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', defaultFilename)
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('导出成功')
+  } catch (error) {
+    ElMessage.error('导出失败: ' + (error.message || '未知错误'))
+  } finally {
+    loadingRef.value = false
+  }
+}
+
+const handleExportProducts = () => {
+  const params = {}
+  if (selectedShopId.value) params.shop_id = selectedShopId.value
+  if (productSearch.value) params.pnk_code = productSearch.value
+  handleDownloadCSV(emagSyncApi.exportProducts, params, `products_${Date.now()}.csv`, exportingProducts)
+}
+
 const loadProducts = async () => {
   loadingProducts.value = true
   try {
@@ -1702,6 +1780,17 @@ const loadProducts = async () => {
   } finally {
     loadingProducts.value = false
   }
+}
+
+const handleExportOrders = () => {
+  const params = {}
+  if (selectedShopId.value) params.shop_id = selectedShopId.value
+  if (orderSearch.value) params.pnk_code = orderSearch.value
+  if (orderDateRange && orderDateRange.value && orderDateRange.value.length === 2) {
+    params.date_start = orderDateRange.value[0]
+    params.date_end = orderDateRange.value[1]
+  }
+  handleDownloadCSV(emagSyncApi.exportOrders, params, `orders_${Date.now()}.csv`, exportingOrders)
 }
 
 const loadOrders = async () => {
@@ -1734,6 +1823,17 @@ const loadOrders = async () => {
   }
 }
 
+const handleExportReturns = () => {
+  const params = {}
+  if (selectedShopId.value) params.shop_id = selectedShopId.value
+  if (returnSearch.value) params.pnk_code = returnSearch.value
+  if (returnDateRange && returnDateRange.value && returnDateRange.value.length === 2) {
+    params.date_start = returnDateRange.value[0]
+    params.date_end = returnDateRange.value[1]
+  }
+  handleDownloadCSV(emagSyncApi.exportReturns, params, `returns_${Date.now()}.csv`, exportingReturns)
+}
+
 const loadReturns = async () => {
   loadingReturns.value = true
   try {
@@ -1762,6 +1862,26 @@ const loadReturns = async () => {
   } finally {
     loadingReturns.value = false
   }
+}
+
+const handleExportShipmentsSummary = () => {
+  const params = {}
+  if (selectedShopId.value) params.shop_id = selectedShopId.value
+  if (shipmentSearch.value) {
+    const id = parseInt(shipmentSearch.value)
+    if (!isNaN(id)) params.reception_id = id
+  }
+  handleDownloadCSV(emagSyncApi.exportInboundShipmentsSummary, params, `shipments_summary_${Date.now()}.csv`, exportingShipmentsSummary)
+}
+
+const handleExportShipmentsDetails = () => {
+  const params = {}
+  if (selectedShopId.value) params.shop_id = selectedShopId.value
+  if (shipmentSearch.value) {
+    const id = parseInt(shipmentSearch.value)
+    if (!isNaN(id)) params.reception_id = id
+  }
+  handleDownloadCSV(emagSyncApi.exportInboundShipmentsDetails, params, `shipments_details_${Date.now()}.csv`, exportingShipmentsDetails)
 }
 
 const loadShipments = async () => {

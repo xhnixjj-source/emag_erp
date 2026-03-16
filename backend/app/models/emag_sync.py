@@ -190,6 +190,7 @@ class EmagInboundShipment(Base):
     shop_id = Column(Integer, ForeignKey("emag_shop.id"), nullable=True, index=True)  # 所属店铺
     reception_id = Column(Integer, nullable=False, index=True)  # eMAG reception ID
     status = Column(String(50), nullable=True, index=True)  # Status: finalized, pending, etc.
+    number_of_units = Column(Integer, nullable=True)  # Quantity of units from the list API
     
     # Sync information
     synced_at = Column(DateTime(timezone=True), nullable=True)  # Last sync time

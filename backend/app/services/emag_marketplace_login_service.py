@@ -1545,18 +1545,23 @@ class EmagMarketplaceLoginService:
             if not isinstance(list_res, dict) or "data" not in list_res:
                 raise RuntimeError(f"运单列表返回格式错误: {list_res}")
             
-            # 2. 筛选 finalized 运单（与 login_test.py 一致）
+            # 2. 筛选除 draft, canceled 外的运单
             data = list_res.get("data", {})
             all_receptions = data.get("rows", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-            finalized_list = [item for item in all_receptions if item.get("status") == "finalized"]
             
-            logger.info(f"获取到 {len(all_receptions)} 条总记录，其中 {len(finalized_list)} 条为 finalized 状态")
+            # 过滤掉 draft 和取消相关的状态
+            target_list = [
+                item for item in all_receptions 
+                if item.get("status", "").lower() not in ("draft", "canceled", "cancelled", "anulat")
+            ]
             
-            if not finalized_list:
-                logger.info("没有找到 finalized 状态的运单")
+            logger.info(f"获取到 {len(all_receptions)} 条总记录，其中 {len(target_list)} 条为需要同步的运单")
+            
+            if not target_list:
+                logger.info("没有找到需要同步的非取消、非草稿状态运单")
                 return {
                     "success": True,
-                    "total_finalized": 0,
+                    "total_finalized": 0,  # 保持原字段名兼容
                     "synced": 0,
                     "skipped": 0,
                     "errors": 0,
@@ -1568,24 +1573,52 @@ class EmagMarketplaceLoginService:
             error_count = 0
             error_list = []
             
-            # 3. 遍历 finalized 运单，获取详情并存入数据库（与 login_test.py 一致）
-            for item in finalized_list:
+            # 3. 遍历目标运单，获取详情并存入数据库
+            for item in target_list:
                 reception_id = item.get("id")
                 if not reception_id:
                     continue
                 
                 try:
+                    new_status = item.get("status", "")
+                    number_of_units = item.get("numberOfUnits", 0)  # 从列表 JSON 获取该字段
+                    
                     # 检查是否已存在
                     existing = db.query(EmagInboundShipment).filter(
                         EmagInboundShipment.reception_id == reception_id
                     ).first()
                     
                     if existing:
-                        logger.debug(f"运单 {reception_id} 已存在，跳过")
-                        skipped_count += 1
-                        continue
+                        # 如果原先和现在都是 finalized，且数量等没变，跳过避免重复抓取详情
+                        if existing.status == "finalized" and new_status == "finalized" and existing.number_of_units == number_of_units:
+                            logger.debug(f"运单 {reception_id} 已存在且已完成，跳过")
+                            skipped_count += 1
+                            continue
+                        
+                        logger.info(f"运单 {reception_id} 更新：状态 {existing.status}->{new_status}, 数量 -> {number_of_units}")
+                        existing.status = new_status
+                        existing.number_of_units = number_of_units
+                        existing.synced_at = datetime.utcnow()
+                        shipment = existing
+                        
+                        # 清除旧详情，后续重新插入（状态或数量有变动时需要刷新）
+                        db.query(EmagInboundShipmentDetail).filter(
+                            EmagInboundShipmentDetail.shipment_id == shipment.id
+                        ).delete()
+                    else:
+                        # 写入运单主记录
+                        shipment = EmagInboundShipment(
+                            shop_id=self._current_shop_id,
+                            reception_id=reception_id,
+                            status=new_status,
+                            number_of_units=number_of_units,
+                            synced_at=datetime.utcnow()
+                        )
+                        db.add(shipment)
                     
-                    # 获取详情（与 login_test.py 一致）
+                    db.flush()
+                    
+                    # 获取详情（已入仓数量）
                     logger.info(f"正在获取运单 {reception_id} 的详情...")
                     detail_url = f"https://marketplace.emag.ro/api-ui/fio/get-transferred-to-storage-quantity/{reception_id}"
                     
@@ -1607,27 +1640,17 @@ class EmagMarketplaceLoginService:
                         raise RuntimeError(f"获取运单详情失败: {detail_data}")
                     
                     if not isinstance(detail_data, dict) or detail_data.get("code") != 200:
-                        logger.warning(f"运单 {reception_id} 详情返回格式异常: {detail_data}")
-                        error_count += 1
-                        error_list.append({"reception_id": reception_id, "error": "详情返回格式异常"})
+                        logger.warning(f"运单 {reception_id} 详情返回格式异常（可能尚未入仓）: {detail_data}")
+                        db.commit()  # 正在处理中的运单可能接口尚无详情数据，视为成功同步了其"主状态"
+                        synced_count += 1
                         continue
                     
                     detail_items = detail_data.get("data", [])
                     if not detail_items:
                         logger.warning(f"运单 {reception_id} 没有详情数据")
-                        error_count += 1
-                        error_list.append({"reception_id": reception_id, "error": "没有详情数据"})
+                        db.commit()  # 同理，没有详情依然算同步主表成功
+                        synced_count += 1
                         continue
-                    
-                    # 写入数据库
-                    shipment = EmagInboundShipment(
-                        shop_id=self._current_shop_id,
-                        reception_id=reception_id,
-                        status=item.get("status", "finalized"),
-                        synced_at=datetime.utcnow()
-                    )
-                    db.add(shipment)
-                    db.flush()
                     
                     for detail_item in detail_items:
                         expiration_date = None
@@ -1663,14 +1686,14 @@ class EmagMarketplaceLoginService:
             
             result = {
                 "success": True,
-                "total_finalized": len(finalized_list),
+                "total_finalized": len(target_list),
                 "synced": synced_count,
                 "skipped": skipped_count,
                 "errors": error_count,
                 "error_list": error_list
             }
             
-            logger.info(f"运单详情同步完成: 总计 {len(finalized_list)} 条，成功 {synced_count} 条，跳过 {skipped_count} 条，失败 {error_count} 条")
+            logger.info(f"运单详情同步完成: 总计 {len(target_list)} 条，成功 {synced_count} 条，跳过 {skipped_count} 条，失败 {error_count} 条")
             return result
             
         except Exception as e:

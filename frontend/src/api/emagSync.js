@@ -22,8 +22,11 @@ export const emagSyncApi = {
   
   // Data queries (支持 shop_id 筛选)
   getProducts: (params) => api.get('/emag-sync/products', { params }),
+  exportProducts: (params) => api.get('/emag-sync/products/export', { params, responseType: 'blob' }),
   getOrders: (params) => api.get('/emag-sync/orders', { params }),
+  exportOrders: (params) => api.get('/emag-sync/orders/export', { params, responseType: 'blob' }),
   getReturns: (params) => api.get('/emag-sync/returns', { params }),
+  exportReturns: (params) => api.get('/emag-sync/returns/export', { params, responseType: 'blob' }),
   getSyncStatus: () => api.get('/emag-sync/sync-status'),
 
   // Marketplace backend login (支持 shop_id)
@@ -38,9 +41,12 @@ export const emagSyncApi = {
   getInboundShipmentsSyncStatus: () => api.get('/emag-marketplace/inbound-shipments/sync-status'),
   syncInboundShipmentsDetails: () => api.post('/emag-marketplace/inbound-shipments/sync-details'),
   getInboundShipments: (params) => api.get('/emag-marketplace/inbound-shipments', { params }),
+  exportInboundShipmentsSummary: (params) => api.get('/emag-marketplace/inbound-shipments/export-summary', { params, responseType: 'blob' }),
+  exportInboundShipmentsDetails: (params) => api.get('/emag-marketplace/inbound-shipments/export-details', { params, responseType: 'blob' }),
 
   // Ads (支持 shop_id 筛选)
   syncAds: (data) => api.post('/emag-marketplace/ads/sync', data),
   getAdsSyncProgress: () => api.get('/emag-marketplace/ads/sync-progress'),
-  getAdsPerformance: (params) => api.get('/emag-marketplace/ads/performance', { params })
+  getAdsPerformance: (params) => api.get('/emag-marketplace/ads/performance', { params }),
+  exportAdsPerformance: (params) => api.get('/emag-marketplace/ads/performance/export', { params, responseType: 'blob' })
 }

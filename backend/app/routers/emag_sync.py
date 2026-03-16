@@ -2,10 +2,13 @@
 import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_, func
 from pydantic import BaseModel
 from datetime import datetime, date
+import io
+import csv
 
 from app.database import get_db, SessionLocal
 from app.middleware.auth_middleware import require_auth
@@ -429,6 +432,48 @@ async def get_products(
     }
 
 
+@router.get("/products/export")
+async def export_products(
+    pnk_code: Optional[str] = Query(None),
+    ean: Optional[str] = Query(None),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """Export products as CSV"""
+    query = db.query(EmagProduct)
+    if shop_id is not None:
+        query = query.filter(EmagProduct.shop_id == shop_id)
+    if pnk_code:
+        query = query.filter(EmagProduct.pnk_code == pnk_code)
+    if ean:
+        query = query.filter(EmagProduct.ean == ean)
+        
+    def iter_csv():
+        # BOM for Excel to recognize UTF-8
+        yield b'\xef\xbb\xbf'
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Shop ID", "Product ID", "PNK Code", "EAN", "Part Number", "Name", "Brand", "Sale Price", "Stock", "Status", "Synced At"])
+        yield output.getvalue().encode('utf-8')
+        output.seek(0)
+        output.truncate(0)
+        
+        for p in query.yield_per(500):
+            writer.writerow([
+                p.id, p.shop_id, p.product_id, p.pnk_code, p.ean, p.part_number, 
+                p.name, p.brand, p.sale_price, p.stock, p.status, 
+                p.synced_at.strftime('%Y-%m-%d %H:%M:%S') if p.synced_at else ""
+            ])
+            yield output.getvalue().encode('utf-8')
+            output.seek(0)
+            output.truncate(0)
+            
+    response = StreamingResponse(iter_csv(), media_type="text/csv")
+    response.headers["Content-Disposition"] = f"attachment; filename=products_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+    return response
+
+
 @router.get("/orders")
 async def get_orders(
     skip: int = Query(0, ge=0),
@@ -481,6 +526,72 @@ async def get_orders(
     }
 
 
+@router.get("/orders/export")
+async def export_orders(
+    pnk_code: Optional[str] = Query(None),
+    ean: Optional[str] = Query(None),
+    date_start: Optional[str] = Query(None),
+    date_end: Optional[str] = Query(None),
+    order_status: Optional[int] = Query(None),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """Export orders as CSV"""
+    query = db.query(EmagOrder)
+    
+    if shop_id is not None:
+        query = query.filter(EmagOrder.shop_id == shop_id)
+    if pnk_code:
+        query = query.filter(EmagOrder.pnk_code == pnk_code)
+    if ean:
+        query = query.filter(EmagOrder.ean == ean)
+    if order_status is not None:
+        query = query.filter(EmagOrder.order_status == order_status)
+    if date_start:
+        try:
+            start_date = datetime.fromisoformat(date_start.replace('Z', '+00:00'))
+            query = query.filter(EmagOrder.order_date >= start_date)
+        except ValueError:
+            pass
+    if date_end:
+        try:
+            end_date = datetime.fromisoformat(date_end.replace('Z', '+00:00'))
+            query = query.filter(EmagOrder.order_date <= end_date)
+        except ValueError:
+            pass
+            
+    def iter_csv():
+        yield b'\xef\xbb\xbf'
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "ID", "Shop ID", "Order ID", "Order Date", "Status", "Payment Mode", 
+            "Customer Name", "Customer Email", "Customer Phone", "Billing City", "Shipping City", 
+            "PNK Code", "EAN", "Product Name", "Quantity", "Sale Price", "Total Amount", "Synced At"
+        ])
+        yield output.getvalue().encode('utf-8')
+        output.seek(0)
+        output.truncate(0)
+        
+        for p in query.yield_per(500):
+            writer.writerow([
+                p.id, p.shop_id, p.order_id, 
+                p.order_date.strftime('%Y-%m-%d %H:%M:%S') if p.order_date else "",
+                p.order_status, p.payment_mode_id, p.customer_name, p.customer_email, p.customer_phone,
+                p.billing_city, p.shipping_city, p.pnk_code, p.ean, p.product_name, 
+                p.quantity, p.sale_price, p.total_amount,
+                p.synced_at.strftime('%Y-%m-%d %H:%M:%S') if p.synced_at else ""
+            ])
+            yield output.getvalue().encode('utf-8')
+            output.seek(0)
+            output.truncate(0)
+            
+    response = StreamingResponse(iter_csv(), media_type="text/csv")
+    response.headers["Content-Disposition"] = f"attachment; filename=orders_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+    return response
+
+
 @router.get("/returns")
 async def get_returns(
     skip: int = Query(0, ge=0),
@@ -531,6 +642,71 @@ async def get_returns(
         "skip": skip,
         "limit": limit
     }
+
+
+@router.get("/returns/export")
+async def export_returns(
+    pnk_code: Optional[str] = Query(None),
+    ean: Optional[str] = Query(None),
+    date_start: Optional[str] = Query(None),
+    date_end: Optional[str] = Query(None),
+    return_status: Optional[int] = Query(None),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """Export returns as CSV"""
+    query = db.query(EmagReturn)
+    
+    if shop_id is not None:
+        query = query.filter(EmagReturn.shop_id == shop_id)
+    if pnk_code:
+        query = query.filter(EmagReturn.pnk_code == pnk_code)
+    if ean:
+        query = query.filter(EmagReturn.ean == ean)
+    if return_status is not None:
+        query = query.filter(EmagReturn.return_status == return_status)
+    if date_start:
+        try:
+            start_date = datetime.fromisoformat(date_start.replace('Z', '+00:00'))
+            query = query.filter(EmagReturn.return_date >= start_date)
+        except ValueError:
+            pass
+    if date_end:
+        try:
+            end_date = datetime.fromisoformat(date_end.replace('Z', '+00:00'))
+            query = query.filter(EmagReturn.return_date <= end_date)
+        except ValueError:
+            pass
+            
+    def iter_csv():
+        yield b'\xef\xbb\xbf'
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "ID", "Shop ID", "RMA ID", "Order ID", "Return Date", "Status", 
+            "PNK Code", "EAN", "Product Name", "Quantity", "Sale Price", 
+            "Reason", "Synced At"
+        ])
+        yield output.getvalue().encode('utf-8')
+        output.seek(0)
+        output.truncate(0)
+        
+        for p in query.yield_per(500):
+            writer.writerow([
+                p.id, p.shop_id, p.rma_id, p.order_id,
+                p.return_date.strftime('%Y-%m-%d %H:%M:%S') if p.return_date else "",
+                p.return_status, p.pnk_code, p.ean, p.product_name, 
+                p.quantity, p.sale_price, p.reason,
+                p.synced_at.strftime('%Y-%m-%d %H:%M:%S') if p.synced_at else ""
+            ])
+            yield output.getvalue().encode('utf-8')
+            output.seek(0)
+            output.truncate(0)
+            
+    response = StreamingResponse(iter_csv(), media_type="text/csv")
+    response.headers["Content-Disposition"] = f"attachment; filename=returns_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+    return response
 
 
 @router.get("/sync-status")

@@ -3,8 +3,12 @@ import threading
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, selectinload
+from datetime import datetime
+import io
+import csv
 
 from app.middleware.auth_middleware import require_auth
 from app.services.emag_marketplace_login_service import emag_marketplace_login_service
@@ -187,7 +191,7 @@ async def get_inbound_shipments(
     total = query.count()
     shipments = (
         query
-        .options(joinedload(EmagInboundShipment.details))
+        .options(selectinload(EmagInboundShipment.details))
         .order_by(EmagInboundShipment.reception_id.desc())
         .offset(skip)
         .limit(limit)
@@ -210,6 +214,7 @@ async def get_inbound_shipments(
             "id": s.id,
             "reception_id": s.reception_id,
             "status": s.status,
+            "number_of_units": s.number_of_units,
             "detail_count": len(detail_list),
             "total_quantity": sum(d["transferred_to_storage_quantity"] for d in detail_list),
             "synced_at": s.synced_at.isoformat() if s.synced_at else None,
@@ -218,6 +223,99 @@ async def get_inbound_shipments(
         })
 
     return {"items": items, "total": total, "skip": skip, "limit": limit}
+
+
+@router.get("/inbound-shipments/export-summary")
+async def export_inbound_shipments_summary(
+    reception_id: Optional[int] = Query(None),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """Export inbound shipments summary as CSV"""
+    query = db.query(EmagInboundShipment)
+
+    if shop_id is not None:
+        query = query.filter(EmagInboundShipment.shop_id == shop_id)
+    if reception_id is not None:
+        query = query.filter(EmagInboundShipment.reception_id == reception_id)
+    if status_filter:
+        query = query.filter(EmagInboundShipment.status == status_filter)
+
+    query = query.options(selectinload(EmagInboundShipment.details)).order_by(EmagInboundShipment.reception_id.desc())
+
+    def iter_csv():
+        yield b'\xef\xbb\xbf'
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Shop ID", "Reception ID", "Status", "Number of Units", "Total Actual Quantity", "SKU Count", "Synced At", "Created At"])
+        yield output.getvalue().encode('utf-8')
+        output.seek(0)
+        output.truncate(0)
+
+        for s in query.yield_per(500):
+            total_qty = sum(d.transferred_to_storage_quantity for d in s.details) if s.details else 0
+            writer.writerow([
+                s.id, s.shop_id, s.reception_id, s.status, s.number_of_units, total_qty, len(s.details) if s.details else 0,
+                s.synced_at.strftime('%Y-%m-%d %H:%M:%S') if s.synced_at else "",
+                s.created_at.strftime('%Y-%m-%d %H:%M:%S') if s.created_at else ""
+            ])
+            yield output.getvalue().encode('utf-8')
+            output.seek(0)
+            output.truncate(0)
+
+    response = StreamingResponse(iter_csv(), media_type="text/csv")
+    response.headers["Content-Disposition"] = f"attachment; filename=inbound_shipments_summary_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+    return response
+
+
+@router.get("/inbound-shipments/export-details")
+async def export_inbound_shipments_details(
+    reception_id: Optional[int] = Query(None),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """Export inbound shipments details (flat structure) as CSV"""
+    query = db.query(EmagInboundShipment)
+
+    if shop_id is not None:
+        query = query.filter(EmagInboundShipment.shop_id == shop_id)
+    if reception_id is not None:
+        query = query.filter(EmagInboundShipment.reception_id == reception_id)
+    if status_filter:
+        query = query.filter(EmagInboundShipment.status == status_filter)
+
+    query = query.options(selectinload(EmagInboundShipment.details)).order_by(EmagInboundShipment.reception_id.desc())
+
+    def iter_csv():
+        yield b'\xef\xbb\xbf'
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Reception ID", "Status", "Vendor Product ID", "Quantity", "Expiration Date", "Producer Lot"])
+        yield output.getvalue().encode('utf-8')
+        output.seek(0)
+        output.truncate(0)
+
+        for s in query.yield_per(500):
+            if s.details:
+                for d in s.details:
+                    writer.writerow([
+                        s.reception_id, s.status, d.vendor_product_id, d.transferred_to_storage_quantity,
+                        d.expiration_date.isoformat() if d.expiration_date else "",
+                        d.producer_lot
+                    ])
+            else:
+                writer.writerow([s.reception_id, s.status, "", "", "", ""])
+            yield output.getvalue().encode('utf-8')
+            output.seek(0)
+            output.truncate(0)
+
+    response = StreamingResponse(iter_csv(), media_type="text/csv")
+    response.headers["Content-Disposition"] = f"attachment; filename=inbound_shipments_details_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -303,4 +401,67 @@ async def get_ads_performance(
         marketplace=marketplace,
         shop_id=shop_id,
     )
+
+
+@router.get("/ads/performance/export")
+async def export_ads_performance(
+    campaign_id: Optional[int] = Query(None),
+    adset_id: Optional[int] = Query(None),
+    date_start: Optional[str] = Query(None),
+    date_end: Optional[str] = Query(None),
+    marketplace: Optional[str] = Query(None),
+    shop_id: Optional[int] = Query(None, description="店铺 ID 筛选"),
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """Export ads performance as CSV"""
+    from app.models.emag_ads import AdsProductPerformance
+    query = db.query(AdsProductPerformance)
+
+    if shop_id is not None:
+        query = query.filter(AdsProductPerformance.shop_id == shop_id)
+    if marketplace:
+        query = query.filter(AdsProductPerformance.marketplace == marketplace)
+    if campaign_id is not None:
+        query = query.filter(AdsProductPerformance.campaign_id == campaign_id)
+    if adset_id is not None:
+        query = query.filter(AdsProductPerformance.adset_id == adset_id)
+    if date_start:
+        ds = datetime.strptime(date_start, "%Y-%m-%d").date()
+        query = query.filter(AdsProductPerformance.date_start >= ds)
+    if date_end:
+        de = datetime.strptime(date_end, "%Y-%m-%d").date()
+        query = query.filter(AdsProductPerformance.date_end <= de)
+
+    query = query.order_by(AdsProductPerformance.cost.desc())
+
+    def iter_csv():
+        yield b'\xef\xbb\xbf'
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "Marketplace", "Campaign ID", "Campaign Name", "Adset ID", "Adset Name",
+            "Product ID", "Product Name", "Part Number", "PNK", "Date Start", "Date End",
+            "Clicks", "Impressions", "CTR", "Actual CPC", "Cost", "Sales", "Products Sold", "CPS", "Cost Percentage"
+        ])
+        yield output.getvalue().encode('utf-8')
+        output.seek(0)
+        output.truncate(0)
+
+        for row in query.yield_per(500):
+            writer.writerow([
+                row.marketplace, row.campaign_id, row.campaign_name, row.adset_id, row.adset_name,
+                row.product_id, row.product_name, row.part_number, row.part_number_key,
+                row.date_start.isoformat() if row.date_start else "",
+                row.date_end.isoformat() if row.date_end else "",
+                row.clicks, row.impressions, row.ctr, row.actual_cpc, row.cost,
+                row.sales, row.products_sold, row.cps, row.cost_percentage
+            ])
+            yield output.getvalue().encode('utf-8')
+            output.seek(0)
+            output.truncate(0)
+
+    response = StreamingResponse(iter_csv(), media_type="text/csv")
+    response.headers["Content-Disposition"] = f"attachment; filename=ads_performance_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+    return response
 
