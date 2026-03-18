@@ -1618,23 +1618,81 @@ class EmagMarketplaceLoginService:
                     
                     db.flush()
                     
-                    # 获取详情（已入仓数量）
+                    # 获取详情（已入仓数量或申请入库数量）
                     logger.info(f"正在获取运单 {reception_id} 的详情...")
-                    detail_url = f"https://marketplace.emag.ro/api-ui/fio/get-transferred-to-storage-quantity/{reception_id}"
                     
-                    detail_data = page_obj.evaluate(f"""
-                        async () => {{
-                            try {{
-                                const res = await fetch('{detail_url}', {{
-                                    method: 'GET',
-                                    headers: {{ 'x-requested-with': 'XMLHttpRequest' }}
-                                }});
-                                return await res.json();
-                            }} catch (e) {{
-                                return "ERROR_DETAIL_JS_" + e.message;
+                    if new_status in ("approved", "in_transit"):
+                        # 对于 approved 和 in_transit 状态，使用 header + line/list 接口抓取申请详情
+                        js_fetch_lines = f"""
+                            async () => {{
+                                try {{
+                                    // 1. 获取 Header
+                                    const hRes = await fetch('https://marketplace.emag.ro/api-ui/fio/get-reception-header/{reception_id}', {{
+                                        method: 'GET',
+                                        headers: {{ 'x-requested-with': 'XMLHttpRequest' }}
+                                    }});
+                                    const hData = await hRes.json();
+                                    const reservations = (hData && hData.data && hData.data.reservations) ? hData.data.reservations : [];
+                                    
+                                    let allLines = [];
+                                    // 2. 遍历 reservation 获取 lines
+                                    for (let resv of reservations) {{
+                                        let page = 1;
+                                        let pageSize = 100;
+                                        let hasMore = true;
+                                        while (hasMore) {{
+                                            const lRes = await fetch('https://marketplace.emag.ro/api-ui/fio/reception-line/list', {{
+                                                method: 'POST',
+                                                headers: {{
+                                                    'content-type': 'application/json',
+                                                    'x-requested-with': 'XMLHttpRequest'
+                                                }},
+                                                body: JSON.stringify({{
+                                                    reception_id: {reception_id},
+                                                    reservation_id: resv.id,
+                                                    page: page,
+                                                    pageSize: pageSize
+                                                }})
+                                            }});
+                                            const lData = await lRes.json();
+                                            let rows = [];
+                                            if (lData && lData.data) {{
+                                                rows = lData.data.rows || lData.data;
+                                            }}
+                                            if (!Array.isArray(rows)) rows = [];
+                                            
+                                            allLines = allLines.concat(rows);
+                                            if (rows.length < pageSize) {{
+                                                hasMore = false;
+                                            }} else {{
+                                                page++;
+                                            }}
+                                        }}
+                                    }}
+                                    // 伪装成相同的返回格式，以便 Python 端统一处理
+                                    return {{ "code": 200, "data": allLines }};
+                                }} catch(e) {{
+                                    return "ERROR_DETAIL_JS_" + e.message;
+                                }}
                             }}
-                        }}
-                    """)
+                        """
+                        detail_data = page_obj.evaluate(js_fetch_lines)
+                    else:
+                        # 对于 finalized / receiving 等状态，继续使用原有的已上架数量接口
+                        detail_url = f"https://marketplace.emag.ro/api-ui/fio/get-transferred-to-storage-quantity/{reception_id}"
+                        detail_data = page_obj.evaluate(f"""
+                            async () => {{
+                                try {{
+                                    const res = await fetch('{detail_url}', {{
+                                        method: 'GET',
+                                        headers: {{ 'x-requested-with': 'XMLHttpRequest' }}
+                                    }});
+                                    return await res.json();
+                                }} catch (e) {{
+                                    return "ERROR_DETAIL_JS_" + e.message;
+                                }}
+                            }}
+                        """)
                     
                     if isinstance(detail_data, str) and detail_data.startswith("ERROR_DETAIL_JS_"):
                         raise RuntimeError(f"获取运单详情失败: {detail_data}")
@@ -1654,19 +1712,30 @@ class EmagMarketplaceLoginService:
                     
                     for detail_item in detail_items:
                         expiration_date = None
-                        if detail_item.get("expirationDate"):
+                        # 兼容不同接口返回的过期时间字段名
+                        exp_date_str = detail_item.get("expirationDate") or detail_item.get("expiration_date")
+                        if exp_date_str:
                             try:
-                                expiration_date = datetime.strptime(detail_item["expirationDate"], "%Y-%m-%d").date()
+                                expiration_date = datetime.strptime(exp_date_str, "%Y-%m-%d").date()
                             except (ValueError, TypeError):
                                 pass
+                        
+                        # 兼容不同接口返回的 商品ID 字段名
+                        vid = detail_item.get("vendorProductId") or detail_item.get("vendor_product_id") or detail_item.get("productId") or detail_item.get("id")
+                        
+                        # 兼容不同接口返回的 数量 字段名（新接口大概率叫 quantity 或 expectedQuantity）
+                        qty = detail_item.get("transferredToStorageQuantity") or detail_item.get("quantity") or detail_item.get("expectedQuantity") or detail_item.get("requestedQuantity") or 0
+                        
+                        # 兼容不同接口返回的 批次号 字段名
+                        lot = detail_item.get("producerLot") or detail_item.get("producer_lot")
                         
                         detail = EmagInboundShipmentDetail(
                             shipment_id=shipment.id,
                             reception_id=reception_id,
-                            vendor_product_id=detail_item.get("vendorProductId"),
-                            transferred_to_storage_quantity=detail_item.get("transferredToStorageQuantity", 0),
+                            vendor_product_id=vid,
+                            transferred_to_storage_quantity=qty,
                             expiration_date=expiration_date,
-                            producer_lot=detail_item.get("producerLot"),
+                            producer_lot=lot,
                             synced_at=datetime.utcnow()
                         )
                         db.add(detail)

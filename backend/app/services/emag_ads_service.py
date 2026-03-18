@@ -297,7 +297,6 @@ def _sync_single_week(
     campaign_params = {
         "date_start": ds,
         "date_end": de,
-        "inherited_status[]": "active",
         "sort[]": json.dumps({"field": "id", "direction": "desc"}),
     }
     campaigns = _fetch_all_pages(
@@ -322,7 +321,6 @@ def _sync_single_week(
             adset_params = {
                 "date_start": ds,
                 "date_end": de,
-                "status[]": "active",
             }
             adsets = _fetch_all_pages(
                 page_obj,
@@ -352,7 +350,6 @@ def _sync_single_week(
                     "adset_name": adset_name,
                     "date_start": ds,
                     "date_end": de,
-                    "status[]": "active",
                 }
                 products = _fetch_all_pages(
                     page_obj,
@@ -698,7 +695,15 @@ def query_ads_performance(
     shop_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """查询广告产品表现数据（分页）。"""
-    query = db.query(AdsProductPerformance)
+    query = db.query(
+        AdsProductPerformance,
+        AdsAdset.status.label("adset_status")
+    ).outerjoin(
+        AdsAdset,
+        (AdsProductPerformance.adset_id == AdsAdset.adset_id) &
+        (AdsProductPerformance.marketplace == AdsAdset.marketplace) &
+        (AdsProductPerformance.campaign_id == AdsAdset.campaign_id)
+    )
 
     if shop_id is not None:
         query = query.filter(AdsProductPerformance.shop_id == shop_id)
@@ -726,29 +731,32 @@ def query_ads_performance(
 
     result_items = []
     for row in items:
+        perf_obj = row[0]
+        adset_status = row[1]
         result_items.append({
-            "id": row.id,
-            "marketplace": row.marketplace,
-            "campaign_id": row.campaign_id,
-            "campaign_name": row.campaign_name,
-            "adset_id": row.adset_id,
-            "adset_name": row.adset_name,
-            "product_id": row.product_id,
-            "product_name": row.product_name,
-            "part_number": row.part_number,
-            "part_number_key": row.part_number_key,
-            "date_start": row.date_start.isoformat() if row.date_start else None,
-            "date_end": row.date_end.isoformat() if row.date_end else None,
-            "clicks": row.clicks,
-            "impressions": row.impressions,
-            "ctr": row.ctr,
-            "actual_cpc": row.actual_cpc,
-            "cost": row.cost,
-            "sales": row.sales,
-            "products_sold": row.products_sold,
-            "cps": row.cps,
-            "cost_percentage": row.cost_percentage,
-            "synced_at": row.synced_at.isoformat() if row.synced_at else None,
+            "id": perf_obj.id,
+            "marketplace": perf_obj.marketplace,
+            "campaign_id": perf_obj.campaign_id,
+            "campaign_name": perf_obj.campaign_name,
+            "adset_id": perf_obj.adset_id,
+            "adset_name": perf_obj.adset_name,
+            "status": adset_status,
+            "product_id": perf_obj.product_id,
+            "product_name": perf_obj.product_name,
+            "part_number": perf_obj.part_number,
+            "part_number_key": perf_obj.part_number_key,
+            "date_start": perf_obj.date_start.isoformat() if perf_obj.date_start else None,
+            "date_end": perf_obj.date_end.isoformat() if perf_obj.date_end else None,
+            "clicks": perf_obj.clicks,
+            "impressions": perf_obj.impressions,
+            "ctr": perf_obj.ctr,
+            "actual_cpc": perf_obj.actual_cpc,
+            "cost": perf_obj.cost,
+            "sales": perf_obj.sales,
+            "products_sold": perf_obj.products_sold,
+            "cps": perf_obj.cps,
+            "cost_percentage": perf_obj.cost_percentage,
+            "synced_at": perf_obj.synced_at.isoformat() if perf_obj.synced_at else None,
         })
 
     return {"items": result_items, "total": total, "skip": skip, "limit": limit}

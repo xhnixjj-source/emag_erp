@@ -415,8 +415,17 @@ async def export_ads_performance(
     db: Session = Depends(get_db),
 ):
     """Export ads performance as CSV"""
-    from app.models.emag_ads import AdsProductPerformance
-    query = db.query(AdsProductPerformance)
+    from app.models.emag_ads import AdsProductPerformance, AdsAdset
+    
+    query = db.query(
+        AdsProductPerformance,
+        AdsAdset.status.label("adset_status")
+    ).outerjoin(
+        AdsAdset,
+        (AdsProductPerformance.adset_id == AdsAdset.adset_id) &
+        (AdsProductPerformance.marketplace == AdsAdset.marketplace) &
+        (AdsProductPerformance.campaign_id == AdsAdset.campaign_id)
+    )
 
     if shop_id is not None:
         query = query.filter(AdsProductPerformance.shop_id == shop_id)
@@ -440,7 +449,7 @@ async def export_ads_performance(
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow([
-            "Marketplace", "Campaign ID", "Campaign Name", "Adset ID", "Adset Name",
+            "Marketplace", "Campaign ID", "Campaign Name", "Adset ID", "Adset Name", "Status",
             "Product ID", "Product Name", "Part Number", "PNK", "Date Start", "Date End",
             "Clicks", "Impressions", "CTR", "Actual CPC", "Cost", "Sales", "Products Sold", "CPS", "Cost Percentage"
         ])
@@ -449,13 +458,15 @@ async def export_ads_performance(
         output.truncate(0)
 
         for row in query.yield_per(500):
+            perf_obj = row[0]
+            adset_status = row[1]
             writer.writerow([
-                row.marketplace, row.campaign_id, row.campaign_name, row.adset_id, row.adset_name,
-                row.product_id, row.product_name, row.part_number, row.part_number_key,
-                row.date_start.isoformat() if row.date_start else "",
-                row.date_end.isoformat() if row.date_end else "",
-                row.clicks, row.impressions, row.ctr, row.actual_cpc, row.cost,
-                row.sales, row.products_sold, row.cps, row.cost_percentage
+                perf_obj.marketplace, perf_obj.campaign_id, perf_obj.campaign_name, perf_obj.adset_id, perf_obj.adset_name, adset_status,
+                perf_obj.product_id, perf_obj.product_name, perf_obj.part_number, perf_obj.part_number_key,
+                perf_obj.date_start.isoformat() if perf_obj.date_start else "",
+                perf_obj.date_end.isoformat() if perf_obj.date_end else "",
+                perf_obj.clicks, perf_obj.impressions, perf_obj.ctr, perf_obj.actual_cpc, perf_obj.cost,
+                perf_obj.sales, perf_obj.products_sold, perf_obj.cps, perf_obj.cost_percentage
             ])
             yield output.getvalue().encode('utf-8')
             output.seek(0)

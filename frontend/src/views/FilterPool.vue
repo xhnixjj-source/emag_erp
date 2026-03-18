@@ -15,47 +15,51 @@
       </template>
 
       <!-- 筛选器 -->
-      <el-form :model="filters" label-width="100px" class="filter-form">
-        <el-row :gutter="20">
-          <el-col :span="4">
+      <el-form :model="filters" label-width="80px" class="filter-form">
+        <el-row :gutter="10">
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
             <el-form-item label="价格区间">
-              <el-input-number v-model="filters.price_min" :min="0" :precision="2" placeholder="最低价" style="width: 45%" />
-              <span style="margin: 0 5px">-</span>
-              <el-input-number v-model="filters.price_max" :min="0" :precision="2" placeholder="最高价" style="width: 45%" />
+              <div class="range-input-wrapper">
+                <el-input-number v-model="filters.price_min" :min="0" :precision="2" :controls="false" placeholder="最低价" />
+                <span class="separator">-</span>
+                <el-input-number v-model="filters.price_max" :min="0" :precision="2" :controls="false" placeholder="最高价" />
+              </div>
             </el-form-item>
           </el-col>
-          <el-col :span="4">
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
             <el-form-item label="评论数">
-              <el-input-number v-model="filters.review_count_min" :min="0" placeholder="最少评论" style="width: 45%" />
-              <span style="margin: 0 5px">-</span>
-              <el-input-number v-model="filters.review_count_max" :min="0" placeholder="最多评论" style="width: 45%" />
+              <div class="range-input-wrapper">
+                <el-input-number v-model="filters.review_count_min" :min="0" :controls="false" placeholder="最少" />
+                <span class="separator">-</span>
+                <el-input-number v-model="filters.review_count_max" :min="0" :controls="false" placeholder="最多" />
+              </div>
             </el-form-item>
           </el-col>
-          <el-col :span="4">
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
             <el-form-item label="评分">
-              <el-input-number v-model="filters.rating_min" :min="0" :max="5" :precision="2" placeholder="最低评分" style="width: 45%" />
-              <span style="margin: 0 5px">-</span>
-              <el-input-number v-model="filters.rating_max" :min="0" :max="5" :precision="2" placeholder="最高评分" style="width: 45%" />
+              <div class="range-input-wrapper">
+                <el-input-number v-model="filters.rating_min" :min="0" :max="5" :precision="2" :controls="false" placeholder="最低" />
+                <span class="separator">-</span>
+                <el-input-number v-model="filters.rating_max" :min="0" :max="5" :precision="2" :controls="false" placeholder="最高" />
+              </div>
             </el-form-item>
           </el-col>
-          <el-col :span="4">
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
             <el-form-item label="店铺排名">
-              <el-input-number v-model="filters.shop_rank_max" :min="1" placeholder="最大排名" style="width: 100%" />
+              <el-input-number v-model="filters.shop_rank_max" :min="1" :controls="false" placeholder="最大排名" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="4">
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
             <el-form-item label="类目排名">
-              <el-input-number v-model="filters.category_rank_max" :min="1" placeholder="最大排名" style="width: 100%" />
+              <el-input-number v-model="filters.category_rank_max" :min="1" :controls="false" placeholder="最大排名" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="4">
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
             <el-form-item label="广告排名">
-              <el-input-number v-model="filters.ad_rank_max" :min="1" placeholder="最大排名" style="width: 100%" />
+              <el-input-number v-model="filters.ad_rank_max" :min="1" :controls="false" placeholder="最大排名" style="width: 100%" />
             </el-form-item>
           </el-col>
-        </el-row>
-        <el-row :gutter="20">
-          <el-col :span="4">
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
             <el-form-item label="库存状态">
               <el-select v-model="filters.stock" placeholder="全部" clearable style="width: 100%">
                 <el-option label="有货" value="in_stock" />
@@ -63,7 +67,7 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="4">
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
             <el-form-item label="上架日期">
               <el-select
                 v-model="filters.listed_at_period"
@@ -77,7 +81,7 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :xs="24" :sm="24" :md="16" :lg="12" :xl="8">
             <el-form-item label="品牌剔除">
               <el-select
                 v-model="filters.exclude_brands"
@@ -96,7 +100,7 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :xs="24" :sm="24" :md="16" :lg="12" :xl="8">
             <el-form-item label="店铺剔除">
               <el-select
                 v-model="filters.exclude_shops"
@@ -503,6 +507,21 @@ onMounted(() => {
 
 .filter-form {
   margin-top: 20px;
+}
+
+/* 范围输入框的 Flex 布局，防止挤压变形 */
+.range-input-wrapper {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.range-input-wrapper :deep(.el-input-number) {
+  flex: 1;
+  width: 100%;
+}
+.range-input-wrapper .separator {
+  margin: 0 8px;
+  color: #909399;
 }
 
 .table-header {

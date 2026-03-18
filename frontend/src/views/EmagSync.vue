@@ -734,6 +734,13 @@
                 <el-table-column prop="campaign_name" label="活动名称" width="160" show-overflow-tooltip />
                 <el-table-column prop="adset_id" label="广告组ID" width="90" />
                 <el-table-column prop="adset_name" label="广告组名称" width="160" show-overflow-tooltip />
+                <el-table-column prop="status" label="状态" width="100">
+                  <template #default="{ row }">
+                    <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small">
+                      {{ row.status || '-' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
                 <el-table-column prop="product_id" label="产品ID" width="100" />
                 <el-table-column prop="part_number" label="PNK" width="120" show-overflow-tooltip />
                 <el-table-column prop="part_number_key" label="Prd_Code" width="130" show-overflow-tooltip />
