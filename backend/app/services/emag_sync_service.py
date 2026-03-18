@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.models.emag_sync import EmagShop, EmagAccount, EmagProduct, EmagOrder, EmagReturn
+from app.models.emag_sync import EmagShop, EmagAccount, EmagProduct, EmagOrder, EmagReturn, EmagCategory
 from app.services.emag_api_client import EmagAPIClient
 
 logger = logging.getLogger(__name__)
@@ -514,4 +514,93 @@ class EmagSyncService:
             "success": overall_success,
             "results": results
         }
+
+    def _fetch_categories_by_language(self, client: EmagAPIClient, language: str) -> List[Dict[str, Any]]:
+        """Fetch all categories for a given language with pagination and rate limiting."""
+        categories: List[Dict[str, Any]] = []
+        current_page = 1
+        items_per_page = 100
+
+        while True:
+            payload = {
+                "currentPage": current_page,
+                "itemsPerPage": items_per_page,
+                "language": language.upper(),
+            }
+            response = client._make_request("category", "read", payload)
+            if response.get("isError"):
+                logger.error(f"Failed to fetch categories ({language}): {response.get('messages')}")
+                break
+
+            results = response.get("results", [])
+            if not results:
+                break
+
+            categories.extend(results)
+
+            if len(results) < items_per_page:
+                break
+
+            current_page += 1
+
+        return categories
+
+    def sync_categories(self) -> Dict[str, Any]:
+        """
+        Full sync of eMAG categories (RO + EN) into EmagCategory table.
+        Categories are global per account, not per shop.
+        """
+        try:
+            client = self._get_client()
+
+            # Fetch RO and EN categories
+            # Use lowercase language codes as commonly used in eMAG examples (ro/en)
+            ro_categories = self._fetch_categories_by_language(client, "ro")
+            en_categories = self._fetch_categories_by_language(client, "en")
+
+            # Build EN lookup by id
+            en_name_map = {c.get("id"): c.get("name") for c in en_categories if c.get("id") is not None}
+
+            # Clear existing data (we always re-sync full tree)
+            deleted = self.db.query(EmagCategory).delete()
+            logger.info(f"Deleted {deleted} old category records")
+
+            total_records = 0
+            for cat in ro_categories:
+                cat_id = cat.get("id")
+                if cat_id is None:
+                    continue
+
+                parent_id = cat.get("parent_id")
+                if not parent_id or parent_id == 0:
+                    parent_id = None
+
+                category = EmagCategory(
+                    id=cat_id,
+                    parent_id=parent_id,
+                    name_ro=cat.get("name"),
+                    name_en=en_name_map.get(cat_id),
+                    is_allowed=bool(cat.get("is_allowed", False)),
+                    is_ean_mandatory=bool(cat.get("is_ean_mandatory", False)),
+                    is_warranty_mandatory=bool(cat.get("is_warranty_mandatory", False)),
+                )
+                self.db.add(category)
+                total_records += 1
+
+            self.db.commit()
+
+            logger.info(f"Synced {total_records} categories")
+            return {
+                "success": True,
+                "records_count": total_records,
+                "error": None,
+            }
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Category sync failed: {e}", exc_info=True)
+            return {
+                "success": False,
+                "records_count": 0,
+                "error": str(e),
+            }
 

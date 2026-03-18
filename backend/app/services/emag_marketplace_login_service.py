@@ -1281,19 +1281,6 @@ class EmagMarketplaceLoginService:
             (playwright_instance, browser, context, page) 元组
             调用方负责在使用完毕后关闭 browser 和 playwright_instance。
         """
-        # #region agent log
-        import json as _dbg_json
-        _dbg_log_path = r"d:\emag_erp\.cursor\debug.log"
-        def _dbg_write(loc, msg, data, hyp):
-            try:
-                import time as _t
-                with open(_dbg_log_path, "a", encoding="utf-8") as _f:
-                    _f.write(_dbg_json.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-        _dbg_write("login_svc:_create_authed_page:entry", "auth_storage_path and shop_id", {"auth_storage_path": str(self._auth_storage_path), "path_exists": self._auth_storage_path.exists(), "current_shop_id": self._current_shop_id}, "H1")
-        # #endregion
-
         if not self._auth_storage_path.exists():
             raise Exception("未找到保存的登录状态，请先登录")
         
@@ -1302,15 +1289,13 @@ class EmagMarketplaceLoginService:
         browser = pw.chromium.launch(headless=False)
         context = browser.new_context(storage_state=str(self._auth_storage_path))
         page = context.new_page()
-        
+
         # 导航到 Dashboard（而非首页），已登录时会停留在 dashboard，未登录时会被重定向
         page.goto(self.DASHBOARD_URL, wait_until="domcontentloaded", timeout=15000)
+
         time.sleep(2)
         
         current_url = page.url or ""
-        # #region agent log
-        _dbg_write("login_svc:_create_authed_page:after_nav", "page URL after dashboard navigation", {"url": current_url, "title": page.title()}, "H6")
-        # #endregion
 
         # 判断是否在 dashboard 或其他已登录的后台页面
         on_dashboard = "dashboard" in current_url
@@ -1319,10 +1304,6 @@ class EmagMarketplaceLoginService:
         on_public_page = bool(current_url.rstrip("/").split("/")[-1] in ("ro", "bg", "hu") and "marketplace.emag" in current_url)
 
         logged_in = on_dashboard and not on_auth_page and not on_public_page
-
-        # #region agent log
-        _dbg_write("login_svc:_create_authed_page:login_check", "login detection result", {"url": current_url, "on_dashboard": on_dashboard, "on_auth_page": on_auth_page, "on_public_page": on_public_page, "logged_in": logged_in}, "H6")
-        # #endregion
 
         if not logged_in:
             # 登录状态已失效

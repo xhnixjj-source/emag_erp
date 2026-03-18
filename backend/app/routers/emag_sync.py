@@ -12,7 +12,7 @@ import csv
 
 from app.database import get_db, SessionLocal
 from app.middleware.auth_middleware import require_auth
-from app.models.emag_sync import EmagAccount, EmagProduct, EmagOrder, EmagReturn
+from app.models.emag_sync import EmagAccount, EmagProduct, EmagOrder, EmagReturn, EmagCategory
 from app.services.emag_api_client import EmagAPIClient
 from app.services.emag_sync_service import EmagSyncService
 from app.services.operation_log_service import create_operation_log
@@ -296,6 +296,34 @@ def run_sync_all(user_id: int, shop_id: int = None):
         db.close()
 
 
+def run_sync_categories(user_id: int):
+    """Background task to sync categories (RO + EN)"""
+    db = SessionLocal()
+    try:
+        service = EmagSyncService(db)
+        result = service.sync_categories()
+
+        create_operation_log(
+            db=db,
+            user_id=user_id,
+            operation_type="emag_sync_categories",
+            target_type="emag_category",
+            operation_detail=result,
+        )
+        logger.info(f"Category sync completed: {result}")
+    except Exception as e:
+        logger.error(f"Category sync failed: {e}", exc_info=True)
+        create_operation_log(
+            db=db,
+            user_id=user_id,
+            operation_type="emag_sync_categories",
+            target_type="emag_category",
+            operation_detail={"success": False, "error": str(e)},
+        )
+    finally:
+        db.close()
+
+
 # Sync endpoints
 @router.post("/products", response_model=SyncResponse)
 async def sync_products(
@@ -396,6 +424,29 @@ async def sync_all(
         )
 
 
+@router.post("/categories", response_model=SyncResponse)
+async def sync_categories(
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """Sync categories (RO + EN) from eMAG API (runs in background)"""
+    try:
+        background_tasks.add_task(run_sync_categories, current_user["id"])
+        return {
+            "success": True,
+            "records_count": 0,
+            "error": None,
+            "message": "Category sync started in background",
+        }
+    except Exception as e:
+        logger.error(f"Failed to start category sync: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start sync: {str(e)}",
+        )
+
+
 # Data query endpoints
 @router.get("/products")
 async def get_products(
@@ -430,6 +481,47 @@ async def get_products(
         "skip": skip,
         "limit": limit
     }
+
+
+def _build_category_tree(categories: List[EmagCategory]) -> List[dict]:
+    """Build nested tree JSON from flat EmagCategory rows."""
+    node_map = {}
+    tree: List[dict] = []
+
+    # Prepare nodes
+    for c in categories:
+        node = {
+            "id": c.id,
+            "parent_id": c.parent_id,
+            "name_ro": c.name_ro,
+            "name_en": c.name_en,
+            "is_allowed": c.is_allowed,
+            "is_ean_mandatory": c.is_ean_mandatory,
+            "is_warranty_mandatory": c.is_warranty_mandatory,
+            "children": [],
+        }
+        node_map[c.id] = node
+
+    # Build tree
+    for node in node_map.values():
+        pid = node["parent_id"]
+        if pid is None or pid == 0 or pid not in node_map:
+            tree.append(node)
+        else:
+            node_map[pid]["children"].append(node)
+
+    return tree
+
+
+@router.get("/categories/tree")
+async def get_categories_tree(
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """Get category tree as nested JSON."""
+    categories = db.query(EmagCategory).order_by(EmagCategory.id.asc()).all()
+    tree = _build_category_tree(categories)
+    return tree
 
 
 @router.get("/products/export")

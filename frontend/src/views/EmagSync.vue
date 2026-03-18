@@ -331,6 +331,9 @@
               <el-button type="primary" size="small" @click="syncReturns" :loading="syncingReturns" :disabled="!accountStatus?.configured">
                 同步退货
               </el-button>
+              <el-button type="primary" size="small" @click="syncCategories" :loading="syncingCategories" :disabled="!accountStatus?.configured">
+                同步类目
+              </el-button>
               <el-button type="success" size="small" @click="syncAll" :loading="syncingAll" :disabled="!accountStatus?.configured">
                 同步全部
               </el-button>
@@ -674,6 +677,27 @@
               />
             </el-tab-pane>
 
+            <!-- 类目树 -->
+            <el-tab-pane label="类目树" name="categories">
+              <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+                <div style="font-size: 12px; color: #909399;">
+                  展示从 eMAG 同步的类目树，名称为 RO / EN 双语。
+                </div>
+                <el-button type="primary" size="small" @click="loadCategoryTree" :loading="loadingCategoryTree">
+                  刷新类目树
+                </el-button>
+              </div>
+              <el-tree
+                v-loading="loadingCategoryTree"
+                :data="categoryTree"
+                :props="categoryTreeProps"
+                node-key="id"
+                highlight-current
+                default-expand-all
+                style="height: calc(100vh - 430px); overflow: auto;"
+              />
+            </el-tab-pane>
+
             <!-- 广告数据 -->
             <el-tab-pane label="广告数据" name="ads">
               <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
@@ -887,6 +911,7 @@ const syncingProducts = ref(false)
 const syncingOrders = ref(false)
 const syncingReturns = ref(false)
 const syncingAll = ref(false)
+const syncingCategories = ref(false)
 
 // Sync logs
 const syncLogs = ref([])
@@ -971,6 +996,21 @@ const marketplaceStatusText = computed(() => {
 // Active tab
 const activeTab = ref('products')
 
+// Category tree
+const categoryTree = ref([])
+const loadingCategoryTree = ref(false)
+const categoryTreeProps = {
+  children: 'children',
+  label: (data) => {
+    const ro = data.name_ro || ''
+    const en = data.name_en || ''
+    if (ro && en) return `${ro} / ${en}`
+    if (ro) return ro
+    if (en) return en
+    return `ID ${data.id}`
+  }
+}
+
 // Products data
 const products = ref([])
 const loadingProducts = ref(false)
@@ -999,6 +1039,20 @@ const returnDateRange = ref(null)
 const returnPage = ref(1)
 const returnPageSize = ref(100)
 const returnTotal = ref(0)
+
+// Category tree helpers
+const loadCategoryTree = async () => {
+  loadingCategoryTree.value = true
+  try {
+    const res = await emagSyncApi.getCategoryTree()
+    categoryTree.value = Array.isArray(res) ? res : (res || [])
+  } catch (error) {
+    ElMessage.error('加载类目树失败: ' + (error.response?.data?.detail || error.message))
+    categoryTree.value = []
+  } finally {
+    loadingCategoryTree.value = false
+  }
+}
 
 // Inbound shipments data
 const shipments = ref([])
@@ -1693,6 +1747,37 @@ const syncReturns = async () => {
   }
 }
 
+const syncCategories = async () => {
+  syncingCategories.value = true
+  addLog('info', '开始同步类目 (RO + EN)...')
+  try {
+    const response = await emagSyncApi.syncCategories()
+    if (response?.success) {
+      if (response?.message && response.message.includes('background')) {
+        ElMessage.success('类目同步已启动，正在后台进行...')
+        addLog('info', '类目同步已在后台启动')
+      } else if (response.records_count !== undefined && response.records_count > 0) {
+        ElMessage.success(`类目同步完成，共 ${response.records_count} 条记录`)
+        addLog('success', `类目同步成功: ${response.records_count} 条`)
+        if (activeTab.value === 'categories') {
+          await loadCategoryTree()
+        }
+      } else {
+        ElMessage.success('类目同步已启动，正在后台进行...')
+        addLog('info', '类目同步已在后台启动')
+      }
+    } else {
+      ElMessage.error('类目同步失败: ' + (response?.error || '未知错误'))
+      addLog('error', '类目同步失败: ' + response?.error)
+    }
+  } catch (error) {
+    ElMessage.error('类目同步失败: ' + (error.response?.data?.detail || error.message))
+    addLog('error', '类目同步失败: ' + error.message)
+  } finally {
+    syncingCategories.value = false
+  }
+}
+
 const syncAll = async () => {
   syncingAll.value = true
   addLog('info', '开始同步全部数据...')
@@ -1930,6 +2015,8 @@ const handleTabChange = (tabName) => {
     loadShipments()
   } else if (tabName === 'ads') {
     loadAdsPerformance()
+  } else if (tabName === 'categories') {
+    loadCategoryTree()
   }
 }
 

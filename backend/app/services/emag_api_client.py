@@ -103,12 +103,28 @@ class EmagAPIClient:
                 raise ValueError(f"Unsupported HTTP method: {method}")
             
             response.raise_for_status()
-            result = response.json()
+            try:
+                result = response.json()
+            except Exception:
+                logger.error(
+                    "eMAG API returned non-JSON response",
+                    extra={"url": url, "status_code": response.status_code, "text": response.text[:2000]},
+                )
+                raise Exception(f"API returned non-JSON response (status={response.status_code})")
             
             # Check for API errors
             if result.get('isError', False):
                 error_messages = result.get('messages', [])
                 error_msg = '; '.join(error_messages) if error_messages else 'Unknown API error'
+                logger.error(
+                    "eMAG API error response",
+                    extra={
+                        "url": url,
+                        "payload": payload,
+                        "messages": error_messages,
+                        "result_keys": list(result.keys()),
+                    },
+                )
                 raise Exception(f"eMAG API error: {error_msg}")
             
             return result

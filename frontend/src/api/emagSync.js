@@ -29,6 +29,10 @@ export const emagSyncApi = {
   exportReturns: (params) => api.get('/emag-sync/returns/export', { params, responseType: 'blob' }),
   getSyncStatus: () => api.get('/emag-sync/sync-status'),
 
+  // Categories
+  syncCategories: () => api.post('/emag-sync/categories'),
+  getCategoryTree: () => api.get('/emag-sync/categories/tree'),
+
   // Marketplace backend login (支持 shop_id)
   marketplaceLogin: (data) => api.post('/emag-marketplace/login', data),
   marketplaceLoginStatus: () => api.get('/emag-marketplace/login-status'),

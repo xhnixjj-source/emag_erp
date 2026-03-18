@@ -1,5 +1,5 @@
 """eMAG Marketplace API sync models"""
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Text, Date, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Text, Date, Index, UniqueConstraint, Boolean
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -235,4 +235,39 @@ class EmagInboundShipmentDetail(Base):
         Index('idx_emag_inbound_shipment_detail_shipment_id', 'shipment_id'),
         Index('idx_emag_inbound_shipment_detail_reception_id', 'reception_id'),
         Index('idx_emag_inbound_shipment_detail_vendor_product_id', 'vendor_product_id'),
+    )
+
+
+class EmagCategory(Base):
+    """eMAG category tree (multilingual)"""
+    __tablename__ = "emag_category"
+
+    id = Column(Integer, primary_key=True, index=True)  # eMAG category ID
+    parent_id = Column(Integer, ForeignKey("emag_category.id"), nullable=True, index=True)
+
+    # Multilingual names
+    name_ro = Column(String(255), nullable=True)
+    name_en = Column(String(255), nullable=True)
+
+    # Business flags
+    is_allowed = Column(Boolean, default=False, nullable=False)
+    is_ean_mandatory = Column(Boolean, default=False, nullable=False)
+    is_warranty_mandatory = Column(Boolean, default=False, nullable=False)
+
+    parent = relationship(
+        "EmagCategory",
+        remote_side=[id],
+        back_populates="children",
+    )
+
+    # NOTE: delete-orphan on a one-to-many requires single_parent=True
+    children = relationship(
+        "EmagCategory",
+        back_populates="parent",
+        cascade="all, delete-orphan",
+        single_parent=True,
+    )
+
+    __table_args__ = (
+        Index("idx_emag_category_parent_id", "parent_id"),
     )
