@@ -112,6 +112,18 @@ _FETCH_JS_TEMPLATE = """
 
 def _fetch_json(page, url: str, max_retries: int = 3) -> Any:
     """在 Playwright page 中执行 fetch 并返回 JSON（带重试）。"""
+    # #region agent log
+    import json as _dbg_json
+    _dbg_log_path = r"d:\emag_erp\.cursor\debug.log"
+    def _dbg_write(loc, msg, data, hyp):
+        try:
+            import time as _t
+            with open(_dbg_log_path, "a", encoding="utf-8") as _f:
+                _f.write(_dbg_json.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+    # #endregion
+
     js_code = _FETCH_JS_TEMPLATE.format(url=url)
 
     for attempt in range(1, max_retries + 1):
@@ -122,6 +134,14 @@ def _fetch_json(page, url: str, max_retries: int = 3) -> Any:
         except Exception as e:
             err_msg = str(e)
             logger.warning(f"  fetch attempt {attempt}/{max_retries} 失败: {err_msg[:120]}")
+            # #region agent log
+            _dbg_write(
+                "ads_service:_fetch_json:evaluate_exc",
+                "page.evaluate threw",
+                {"attempt": attempt, "url": url[:300], "page_url": getattr(page, "url", None), "error_type": type(e).__name__, "error": err_msg[:300]},
+                "F1",
+            )
+            # #endregion
             if attempt >= max_retries:
                 raise
             # 页面导航/上下文被销毁 → 等待页面重新稳定后重试
@@ -139,6 +159,37 @@ def _fetch_json(page, url: str, max_retries: int = 3) -> Any:
         if isinstance(result, dict) and result.get("__error"):
             err_msg = result.get("message", "")
             logger.warning(f"  JS fetch attempt {attempt}/{max_retries} 错误: {err_msg}")
+            # #region agent log
+            _dbg_write(
+                "ads_service:_fetch_json:js_fetch_error",
+                "page-side fetch returned __error",
+                {"attempt": attempt, "url": url[:300], "page_url": getattr(page, "url", None), "js_error": err_msg[:200]},
+                "F2",
+            )
+            # 尝试用 Playwright APIRequestContext 探针同一 URL，拿到更具体错误/状态（不包含任何认证 header）
+            try:
+                req = getattr(page, "request", None)
+                if req:
+                    try:
+                        probe = req.get(url, headers={"x-requested-with": "XMLHttpRequest"}, timeout=15000)
+                        _dbg_write(
+                            "ads_service:_fetch_json:probe_ok",
+                            "probe request ok",
+                            {"attempt": attempt, "url": url[:300], "status": probe.status, "ok": probe.ok, "final_url": probe.url},
+                            "F3",
+                        )
+                        logger.warning(f"  [probe] status={probe.status} ok={probe.ok} url={probe.url[:120]}")
+                    except Exception as _pe:
+                        _dbg_write(
+                            "ads_service:_fetch_json:probe_err",
+                            "probe request error",
+                            {"attempt": attempt, "url": url[:300], "error_type": type(_pe).__name__, "error": str(_pe)[:300]},
+                            "F3",
+                        )
+                        logger.warning(f"  [probe] error {type(_pe).__name__}: {str(_pe)[:160]}")
+            except Exception:
+                pass
+            # #endregion
             if attempt >= max_retries:
                 raise RuntimeError(f"Fetch 失败: {result}")
             time.sleep(1.5)
