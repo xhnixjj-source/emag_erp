@@ -1281,6 +1281,38 @@ class EmagMarketplaceLoginService:
             (playwright_instance, browser, context, page) 元组
             调用方负责在使用完毕后关闭 browser 和 playwright_instance。
         """
+        # #region agent log
+        import json as _dbg_json
+        _dbg_log_path = r"d:\emag_erp\.cursor\debug.log"
+        def _dbg_write(loc, msg, data, hyp):
+            try:
+                import time as _t
+                with open(_dbg_log_path, "a", encoding="utf-8") as _f:
+                    _f.write(_dbg_json.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+        try:
+            import os as _dbg_os
+            _dbg_write(
+                "login_svc:_create_authed_page:entry",
+                "enter _create_authed_page",
+                {
+                    "dashboard_url": getattr(self, "DASHBOARD_URL", None),
+                    "auth_storage_path": str(self._auth_storage_path),
+                    "path_exists": self._auth_storage_path.exists(),
+                    "current_shop_id": getattr(self, "_current_shop_id", None),
+                    "env_proxy_keys_present": {
+                        "HTTP_PROXY": bool(_dbg_os.environ.get("HTTP_PROXY")),
+                        "HTTPS_PROXY": bool(_dbg_os.environ.get("HTTPS_PROXY")),
+                        "NO_PROXY": bool(_dbg_os.environ.get("NO_PROXY")),
+                    },
+                },
+                "S1",
+            )
+        except Exception:
+            pass
+        # #endregion
+
         if not self._auth_storage_path.exists():
             raise Exception("未找到保存的登录状态，请先登录")
         
@@ -1291,7 +1323,54 @@ class EmagMarketplaceLoginService:
         page = context.new_page()
 
         # 导航到 Dashboard（而非首页），已登录时会停留在 dashboard，未登录时会被重定向
-        page.goto(self.DASHBOARD_URL, wait_until="domcontentloaded", timeout=15000)
+        # #region agent log
+        try:
+            import time as _dbg_t2
+            _t0 = _dbg_t2.monotonic()
+            _dbg_write(
+                "login_svc:_create_authed_page:pre_goto",
+                "about to goto DASHBOARD_URL",
+                {"target_url": getattr(self, "DASHBOARD_URL", None), "timeout_ms": 15000, "wait_until": "domcontentloaded"},
+                "S2",
+            )
+        except Exception:
+            _t0 = None
+        # #endregion
+        try:
+            resp = page.goto(self.DASHBOARD_URL, wait_until="domcontentloaded", timeout=15000)
+            # #region agent log
+            try:
+                import time as _dbg_t3
+                _elapsed = int((_dbg_t3.monotonic() - _t0) * 1000) if _t0 is not None else None
+                _dbg_write(
+                    "login_svc:_create_authed_page:goto_ok",
+                    "goto DASHBOARD_URL ok",
+                    {
+                        "elapsed_ms": _elapsed,
+                        "response_status": (resp.status if resp else None),
+                        "response_url": (resp.url if resp else None),
+                        "page_url": (page.url or ""),
+                    },
+                    "S2",
+                )
+            except Exception:
+                pass
+            # #endregion
+        except Exception as _goto_e:
+            # #region agent log
+            try:
+                import time as _dbg_t4
+                _elapsed = int((_dbg_t4.monotonic() - _t0) * 1000) if _t0 is not None else None
+                _dbg_write(
+                    "login_svc:_create_authed_page:goto_err",
+                    "goto DASHBOARD_URL error",
+                    {"elapsed_ms": _elapsed, "error_type": type(_goto_e).__name__, "error": str(_goto_e)[:300], "page_url": (page.url or "")},
+                    "S3",
+                )
+            except Exception:
+                pass
+            # #endregion
+            raise
 
         time.sleep(2)
         

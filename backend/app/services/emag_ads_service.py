@@ -424,6 +424,24 @@ def sync_ads_data(
     -------
     统计摘要 dict
     """
+    # #region agent log
+    import json as _dbg_json
+    _dbg_log_path = r"d:\emag_erp\.cursor\debug.log"
+    def _dbg_write(loc, msg, data, hyp):
+        try:
+            import time as _t
+            with open(_dbg_log_path, "a", encoding="utf-8") as _f:
+                _f.write(_dbg_json.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+    _dbg_write(
+        "ads_service:sync_ads_data:entry",
+        "sync_ads_data called",
+        {"marketplace": marketplace, "shop_id": shop_id, "date_start": date_start, "date_end": date_end},
+        "S1",
+    )
+    # #endregion
+
     base_url = MARKETPLACE_BASE_URLS.get(marketplace)
     if not base_url:
         raise ValueError(f"不支持的 marketplace: {marketplace}，可选: {list(MARKETPLACE_BASE_URLS.keys())}")
@@ -458,7 +476,56 @@ def sync_ads_data(
         pw, browser, context, page_obj = login_service._create_authed_page()
 
         # 先导航到目标 marketplace，确保 cookie 域名正确
-        page_obj.goto(f"{base_url}/dashboard", wait_until="domcontentloaded", timeout=15000)
+        # #region agent log
+        try:
+            import time as _dbg_t2
+            _t0 = _dbg_t2.monotonic()
+            _target = f"{base_url}/dashboard"
+            _dbg_write(
+                "ads_service:sync_ads_data:pre_goto_marketplace_dashboard",
+                "about to goto base_url dashboard",
+                {"target_url": _target, "timeout_ms": 15000, "wait_until": "domcontentloaded"},
+                "S4",
+            )
+        except Exception:
+            _t0 = None
+            _target = f"{base_url}/dashboard"
+        # #endregion
+        try:
+            resp2 = page_obj.goto(_target, wait_until="domcontentloaded", timeout=15000)
+            # #region agent log
+            try:
+                import time as _dbg_t3
+                _elapsed = int((_dbg_t3.monotonic() - _t0) * 1000) if _t0 is not None else None
+                _dbg_write(
+                    "ads_service:sync_ads_data:goto_marketplace_dashboard_ok",
+                    "goto base_url dashboard ok",
+                    {
+                        "elapsed_ms": _elapsed,
+                        "response_status": (resp2.status if resp2 else None),
+                        "response_url": (resp2.url if resp2 else None),
+                        "page_url": (page_obj.url or ""),
+                    },
+                    "S4",
+                )
+            except Exception:
+                pass
+            # #endregion
+        except Exception as _goto2_e:
+            # #region agent log
+            try:
+                import time as _dbg_t4
+                _elapsed = int((_dbg_t4.monotonic() - _t0) * 1000) if _t0 is not None else None
+                _dbg_write(
+                    "ads_service:sync_ads_data:goto_marketplace_dashboard_err",
+                    "goto base_url dashboard error",
+                    {"elapsed_ms": _elapsed, "target_url": _target, "error_type": type(_goto2_e).__name__, "error": str(_goto2_e)[:300], "page_url": (page_obj.url or "")},
+                    "S5",
+                )
+            except Exception:
+                pass
+            # #endregion
+            raise
         time.sleep(1)
 
         for idx, (w_start, w_end) in enumerate(weeks, 1):
