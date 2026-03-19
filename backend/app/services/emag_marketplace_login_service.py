@@ -1540,6 +1540,244 @@ class EmagMarketplaceLoginService:
             except Exception:
                 pass
 
+    def fetch_opportunities_by_category(
+        self,
+        category_doc_id: int,
+        per_page: int = 100,
+        max_pages: int = 30,
+        duplicated_documentation: int = 2,
+        sort_field: str = "performance",
+        sort_direction: str = "asc",
+        sleep_seconds: float = 0.4,
+    ) -> Dict[str, Any]:
+        """
+        Fetch opportunities products from marketplace api-ui by category.
+        Uses saved storage_state to restore login session.
+
+        Notes:
+        - This is an api-ui endpoint and must be called with authenticated session cookies.
+        - We intentionally cap max_pages to control cost (e.g. 30 pages * 100 = 3000 candidates).
+        """
+        if not isinstance(category_doc_id, int):
+            raise ValueError("category_doc_id must be int")
+        if per_page <= 0:
+            raise ValueError("per_page must be > 0")
+        if max_pages <= 0:
+            raise ValueError("max_pages must be > 0")
+
+        all_products: List[Dict[str, Any]] = []
+        last_meta: Optional[Dict[str, Any]] = None
+        requested_pages = 0
+
+        pw, browser, context, page_obj = None, None, None, None
+        try:
+            pw, browser, context, page_obj = self._create_authed_page()
+
+            for page in range(1, max_pages + 1):
+                requested_pages = page
+                request_body = {
+                    "page": page,
+                    "per_page": per_page,
+                    "duplicated_documentation": duplicated_documentation,
+                    "sort": [{"field": sort_field, "direction": sort_direction}],
+                    "category_doc_id": category_doc_id,
+                }
+
+                logger.info(
+                    f"Fetching opportunities: category_doc_id={category_doc_id}, page={page}, per_page={per_page}"
+                )
+
+                result = page_obj.evaluate(f"""
+                    async () => {{
+                        try {{
+                            const res = await fetch('https://marketplace.emag.ro/api-ui/opportunities/', {{
+                                method: 'POST',
+                                headers: {{
+                                    'content-type': 'application/json',
+                                    'x-requested-with': 'XMLHttpRequest'
+                                }},
+                                body: JSON.stringify({json.dumps(request_body)})
+                            }});
+                            const status = res.status;
+                            const text = await res.text();
+                            try {{ return JSON.parse(text); }} catch(pe) {{ return "ERROR_JS_HTTP" + status + "_" + text.substring(0, 500); }}
+                        }} catch (e) {{
+                            return "ERROR_JS_" + e.message;
+                        }}
+                    }}
+                """)
+
+                if isinstance(result, str) and result.startswith("ERROR_JS_"):
+                    raise RuntimeError(f"Fetch opportunities failed: {result}")
+
+                if not isinstance(result, dict):
+                    raise RuntimeError(f"Unexpected opportunities response: {type(result).__name__}")
+
+                # #region agent log
+                try:
+                    import json as _dbg_json_o
+                    import time as _dbg_time_o
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_dbg_json_o.dumps({
+                            "runId": "pre-fix",
+                            "hypothesisId": "H_opportunities_response_shape",
+                            "location": "emag_marketplace_login_service.py:fetch_opportunities_by_category",
+                            "message": "page response summary",
+                            "data": {
+                                "category_doc_id": category_doc_id,
+                                "page": page,
+                                "result_keys": list(result.keys()) if isinstance(result, dict) else None,
+                                "message_field": result.get("message"),
+                                "has_data": isinstance(result.get("data"), dict),
+                                "data_keys": list((result.get("data") or {}).keys()) if isinstance(result.get("data"), dict) else None,
+                            },
+                            "timestamp": int(_dbg_time_o.time() * 1000),
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+
+                data = result.get("data") or {}
+                meta = data.get("meta") or {}
+                products = data.get("products") or []
+
+                if isinstance(meta, dict):
+                    last_meta = meta
+
+                if not products:
+                    break
+
+                if isinstance(products, list):
+                    all_products.extend([p for p in products if isinstance(p, dict)])
+
+                if sleep_seconds and sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
+
+            return {
+                "meta": last_meta,
+                "products": all_products,
+                "requested_pages": requested_pages,
+                "candidates_count": len(all_products),
+            }
+        finally:
+            try:
+                if browser:
+                    browser.close()
+            except Exception:
+                pass
+            try:
+                if pw:
+                    pw.stop()
+            except Exception:
+                pass
+
+    def iter_opportunities_by_category(
+        self,
+        category_doc_id: int,
+        per_page: int = 100,
+        max_pages: int = 30,
+        duplicated_documentation: int = 2,
+        sort_field: str = "performance",
+        sort_direction: str = "asc",
+        sleep_seconds: float = 0.0,
+    ):
+        """
+        Iterate opportunities page by page for incremental processing (insert/commit per page).
+        Yields: (page:int, meta:dict|None, products:list[dict])
+        """
+        if not isinstance(category_doc_id, int):
+            raise ValueError("category_doc_id must be int")
+        if per_page <= 0:
+            raise ValueError("per_page must be > 0")
+        if max_pages <= 0:
+            raise ValueError("max_pages must be > 0")
+
+        pw, browser, context, page_obj = None, None, None, None
+        try:
+            pw, browser, context, page_obj = self._create_authed_page()
+
+            for page in range(1, max_pages + 1):
+                request_body = {
+                    "page": page,
+                    "per_page": per_page,
+                    "duplicated_documentation": duplicated_documentation,
+                    "sort": [{"field": sort_field, "direction": sort_direction}],
+                    "category_doc_id": category_doc_id,
+                }
+
+                result = page_obj.evaluate(f"""
+                    async () => {{
+                        try {{
+                            const res = await fetch('https://marketplace.emag.ro/api-ui/opportunities/', {{
+                                method: 'POST',
+                                headers: {{
+                                    'content-type': 'application/json',
+                                    'x-requested-with': 'XMLHttpRequest'
+                                }},
+                                body: JSON.stringify({json.dumps(request_body)})
+                            }});
+                            const status = res.status;
+                            const text = await res.text();
+                            try {{ return JSON.parse(text); }} catch(pe) {{ return "ERROR_JS_HTTP" + status + "_" + text.substring(0, 500); }}
+                        }} catch (e) {{
+                            return "ERROR_JS_" + e.message;
+                        }}
+                    }}
+                """)
+
+                if isinstance(result, str) and result.startswith("ERROR_JS_"):
+                    raise RuntimeError(f"Fetch opportunities failed: {result}")
+
+                if not isinstance(result, dict):
+                    raise RuntimeError(f"Unexpected opportunities response: {type(result).__name__}")
+
+                data = result.get("data") or {}
+                meta = data.get("meta") or {}
+                products = data.get("products") or []
+
+                # #region agent log
+                try:
+                    import json as _dbg_json_o2
+                    import time as _dbg_time_o2
+                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                        _f.write(_dbg_json_o2.dumps({
+                            "runId": "pre-fix",
+                            "hypothesisId": "H_iter_page",
+                            "location": "emag_marketplace_login_service.py:iter_opportunities_by_category",
+                            "message": "yield page",
+                            "data": {
+                                "category_doc_id": category_doc_id,
+                                "page": page,
+                                "products_len": (len(products) if isinstance(products, list) else None),
+                                "meta_page": (meta.get("page") if isinstance(meta, dict) else None),
+                                "meta_total_count": (meta.get("total_count") if isinstance(meta, dict) else None),
+                            },
+                            "timestamp": int(_dbg_time_o2.time() * 1000),
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+
+                if not products:
+                    yield page, meta if isinstance(meta, dict) else None, []
+                    break
+
+                yield page, meta if isinstance(meta, dict) else None, products if isinstance(products, list) else []
+
+                if sleep_seconds and sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
+        finally:
+            try:
+                if browser:
+                    browser.close()
+            except Exception:
+                pass
+            try:
+                if pw:
+                    pw.stop()
+            except Exception:
+                pass
+
     def sync_finalized_shipments_to_db(self, db: Session, limit: int = 50) -> Dict[str, Any]:
         """
         同步 finalized 运单详情到数据库（参照 login_test.py 的完整流程）。

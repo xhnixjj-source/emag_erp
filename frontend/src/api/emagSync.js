@@ -39,6 +39,7 @@ export const emagSyncApi = {
   marketplaceCaptchaDone: () => api.post('/emag-marketplace/captcha-done'),
   marketplaceSubmitSmsCode: (code) => api.post('/emag-marketplace/sms-code', { code }),
   marketplaceLogout: () => api.post('/emag-marketplace/logout'),
+  importOpportunitiesByCategory: (data, shopId) => api.post(`/emag-marketplace/opportunities/import-by-category${shopId ? '?shop_id=' + shopId : ''}`, data),
   
   // Marketplace inbound shipments (支持 shop_id 筛选)
   syncInboundShipments: () => api.post('/emag-marketplace/inbound-shipments/sync'),

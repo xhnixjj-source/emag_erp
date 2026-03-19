@@ -693,9 +693,32 @@
                 :props="categoryTreeProps"
                 node-key="id"
                 highlight-current
-                default-expand-all
+                :default-expanded-keys="[]"
                 style="height: calc(100vh - 430px); overflow: auto;"
-              />
+              >
+                <template #default="{ data }">
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;">
+                    <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                      <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        {{ (data.name_ro || '-') + (data.name_en ? (' / ' + data.name_en) : '') }}
+                      </span>
+                    </div>
+                    <div style="flex: 0 0 auto;">
+                      <el-button
+                        v-if="isCategoryLeaf(data)"
+                        size="small"
+                        type="primary"
+                        text
+                        :loading="importingOpportunitiesByCategory[data.id] === true"
+                        :disabled="isImportOpportunitiesDisabled(data)"
+                        @click.stop="handleImportOpportunitiesByCategory(data)"
+                      >
+                        导入链接(≤3000)
+                      </el-button>
+                    </div>
+                  </div>
+                </template>
+              </el-tree>
             </el-tab-pane>
 
             <!-- 广告数据 -->
@@ -999,6 +1022,7 @@ const activeTab = ref('products')
 // Category tree
 const categoryTree = ref([])
 const loadingCategoryTree = ref(false)
+const importingOpportunitiesByCategory = reactive({})
 const categoryTreeProps = {
   children: 'children',
   label: (data) => {
@@ -1052,6 +1076,61 @@ const loadCategoryTree = async () => {
   } finally {
     loadingCategoryTree.value = false
   }
+}
+
+const handleImportOpportunitiesByCategory = async (category) => {
+  if (!category || !category.id) return
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix',hypothesisId:'H_click_not_firing',location:'EmagSync.vue:handleImportOpportunitiesByCategory:entry',message:'import handler entered',data:{categoryId:category?.id,hasChildren:Array.isArray(category?.children)?category.children.length:null,marketplaceStatus:marketplaceStatus.value,selectedShopId:selectedShopId.value},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+  if (marketplaceStatus.value !== 'logged_in') {
+    ElMessage.warning('请先登录后台（卖家中心）')
+    return
+  }
+
+  const catId = category.id
+  const catName = (category.name_ro || category.name_en || '').trim()
+  importingOpportunitiesByCategory[catId] = true
+  addLog('info', `开始导入类目链接: CAT:${catId} ${catName} (≤3000) ...`)
+  try {
+    const payload = {
+      category_doc_id: catId,
+      category_name: catName,
+      per_page: 100,
+      max_pages: 30
+    }
+    const res = await emagSyncApi.importOpportunitiesByCategory(payload, selectedShopId.value)
+    if (res?.success) {
+      ElMessage.success('已启动导入任务（后台进行），稍后可在链接初筛中查看新增链接')
+      addLog('success', `类目链接导入已启动: CAT:${catId} ${catName}`)
+    } else {
+      ElMessage.error('导入失败: ' + (res?.error || res?.message || '未知错误'))
+      addLog('error', `类目链接导入失败: ${res?.error || res?.message || '未知错误'}`)
+    }
+  } catch (error) {
+    ElMessage.error('导入失败: ' + (error.response?.data?.detail || error.message))
+    addLog('error', '类目链接导入失败: ' + error.message)
+  } finally {
+    importingOpportunitiesByCategory[catId] = false
+  }
+}
+
+const isCategoryLeaf = (category) => {
+  const isLeaf = !category?.children || category.children.length === 0
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix',hypothesisId:'H_leaf_check',location:'EmagSync.vue:isCategoryLeaf',message:'leaf check',data:{categoryId:category?.id,childrenLen:Array.isArray(category?.children)?category.children.length:null,isLeaf,marketplaceStatus:marketplaceStatus.value},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+  return isLeaf
+}
+
+const isImportOpportunitiesDisabled = (category) => {
+  // Do not disable the button based on login status; allow user to trigger and show a clear warning.
+  // The handler will block if not logged in.
+  const disabled = false
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix',hypothesisId:'H_disabled_state',location:'EmagSync.vue:isImportOpportunitiesDisabled',message:'disabled state computed',data:{categoryId:category?.id,disabled,marketplaceStatus:marketplaceStatus.value},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+  return disabled
 }
 
 // Inbound shipments data

@@ -1,6 +1,8 @@
 import logging
 import threading
 from typing import Optional
+import json
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
@@ -15,6 +17,7 @@ from app.services.emag_marketplace_login_service import emag_marketplace_login_s
 from app.services.emag_ads_service import sync_ads_data, query_ads_performance, get_ads_sync_progress, _split_into_iso_weeks
 from app.database import get_db, SessionLocal
 from app.models.emag_sync import EmagInboundShipment, EmagInboundShipmentDetail
+from app.models.keyword import Keyword, KeywordLink, KeywordStatus
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,13 @@ class AdsSyncRequest(BaseModel):
     date_end: str     # YYYY-MM-DD
     marketplace: str = "ro"  # ro / bg / hu
     shop_id: Optional[int] = None  # 关联店铺 ID
+
+
+class OpportunitiesImportRequest(BaseModel):
+    category_doc_id: int
+    category_name: Optional[str] = None
+    per_page: int = 100
+    max_pages: int = 30
 
 
 @router.post("/login")
@@ -94,6 +104,325 @@ async def marketplace_logout(
     """注销并关闭浏览器会话"""
     emag_marketplace_login_service.logout()
     return {"success": True, "status": "not_logged_in"}
+
+
+@router.post("/opportunities/import-by-category")
+async def import_opportunities_by_category(
+    payload: OpportunitiesImportRequest,
+    shop_id: Optional[int] = Query(None, description="店铺 ID（用于加载对应的登录态 storage_state）"),
+    current_user: dict = Depends(require_auth),
+):
+    """
+    导入 opportunities 链接到链接初筛（keyword_links）。
+    - 使用卖家中心登录态（storage_state/cookies）访问 api-ui/opportunities
+    - 每次最多请求 max_pages（默认 30）页候选（per_page 默认 100）
+    - 自动复用/创建 Keyword: CAT:<category_doc_id> <category_name>
+    - 全局按 product_url 去重，已存在则跳过
+    """
+
+    def _dbg(loc: str, msg: str, data: dict, hyp: str):
+        try:
+            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "runId": "pre-fix",
+                    "hypothesisId": hyp,
+                    "location": loc,
+                    "message": msg,
+                    "data": data,
+                    "timestamp": int(time.time() * 1000),
+                }, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def _run():
+        db = SessionLocal()
+        old_shop_id = emag_marketplace_login_service.get_current_shop_id()
+        pw = browser = context = page_obj = None
+        try:
+            if shop_id is not None:
+                emag_marketplace_login_service.set_current_shop_id(shop_id)
+
+            cat_id = int(payload.category_doc_id)
+            cat_name = (payload.category_name or "").strip()
+            if not cat_name:
+                # fallback: use ID only to avoid empty keyword
+                cat_name = f"Category {cat_id}"
+
+            keyword_str = f"CAT:{cat_id} {cat_name}"
+            _dbg("emag_marketplace.py:_run:entry", "start import opportunities", {
+                "shop_id": shop_id,
+                "old_shop_id": old_shop_id,
+                "category_doc_id": cat_id,
+                "category_name_len": len(cat_name),
+                "keyword_str_len": len(keyword_str),
+                "per_page": payload.per_page,
+                "max_pages": payload.max_pages,
+            }, "H_backend_thread_start")
+
+            # Find or create keyword
+            keyword = db.query(Keyword).filter(Keyword.keyword == keyword_str).first()
+            created_keyword = False
+            if not keyword:
+                keyword = Keyword(
+                    keyword=keyword_str,
+                    created_by_user_id=current_user["id"],
+                    status=KeywordStatus.COMPLETED,
+                )
+                db.add(keyword)
+                db.flush()
+                created_keyword = True
+            _dbg("emag_marketplace.py:_run:keyword", "keyword ready", {
+                "keyword_id": getattr(keyword, "id", None),
+                "created_keyword": created_keyword,
+            }, "H_keyword_create")
+
+            created_count = 0
+            skipped_count = 0
+
+            per_page = min(int(payload.per_page), 1000)
+            max_pages = min(int(payload.max_pages), 30)
+
+            # Create ONE authed playwright page for both opportunities + images calls
+            _dbg("emag_marketplace.py:_run:fetch:before", "create authed page", {
+                "category_doc_id": cat_id,
+            }, "H_fetch_begin")
+            pw, browser, context, page_obj = emag_marketplace_login_service._create_authed_page()
+
+            for page in range(1, max_pages + 1):
+                # ---- fetch opportunities page ----
+                opp_body = {
+                    "page": page,
+                    "per_page": per_page,
+                    "duplicated_documentation": 2,
+                    "sort": [{"field": "performance", "direction": "asc"}],
+                    "category_doc_id": cat_id,
+                }
+                opp_res = page_obj.evaluate(f"""
+                    async () => {{
+                        try {{
+                            const res = await fetch('https://marketplace.emag.ro/api-ui/opportunities/', {{
+                                method: 'POST',
+                                headers: {{
+                                    'content-type': 'application/json',
+                                    'x-requested-with': 'XMLHttpRequest'
+                                }},
+                                body: JSON.stringify({json.dumps(opp_body)})
+                            }});
+                            const status = res.status;
+                            const text = await res.text();
+                            try {{ return JSON.parse(text); }} catch(pe) {{ return "ERROR_JS_HTTP" + status + "_" + text.substring(0, 500); }}
+                        }} catch (e) {{
+                            return "ERROR_JS_" + e.message;
+                        }}
+                    }}
+                """)
+                if isinstance(opp_res, str) and opp_res.startswith("ERROR_JS_"):
+                    raise RuntimeError(f"Fetch opportunities failed: {opp_res}")
+                if not isinstance(opp_res, dict):
+                    raise RuntimeError(f"Unexpected opportunities response: {type(opp_res).__name__}")
+
+                data = opp_res.get("data") or {}
+                meta = data.get("meta") or {}
+                products = data.get("products") or []
+                if not isinstance(products, list) or not products:
+                    _dbg("emag_marketplace.py:_run:opp_empty", "no products in page", {"page": page, "meta": meta}, "H_commit_page")
+                    break
+
+                # ---- prepare batch + dedupe ----
+                batch = []
+                for p in products:
+                    if not isinstance(p, dict):
+                        continue
+                    url = (p.get("url") or "").strip()
+                    if not url:
+                        continue
+                    batch.append((url, p))
+
+                urls = [u for u, _ in batch]
+                existing = set()
+                if urls:
+                    existing_rows = db.query(KeywordLink.product_url).filter(KeywordLink.product_url.in_(urls)).all()
+                    existing = {r[0] for r in existing_rows}
+
+                page_created = 0
+                page_skipped = 0
+                created_pnks = []
+
+                for url, p in batch:
+                    if url in existing:
+                        page_skipped += 1
+                        continue
+
+                    pnk = (p.get("part_number_key") or "").strip() or None
+                    best_price = p.get("best_price")
+                    active_offers = p.get("active_offers")
+                    try:
+                        purchase_price = float(best_price) if best_price is not None else 0.0
+                    except Exception:
+                        purchase_price = 0.0
+                    try:
+                        offer_count = int(active_offers) if active_offers is not None else 0
+                    except Exception:
+                        offer_count = 0
+
+                    link = KeywordLink(
+                        keyword_id=keyword.id,
+                        product_url=url,
+                        pnk_code=pnk,
+                        purchase_price=purchase_price,
+                        offer_count=offer_count,
+                        product_title=p.get("product_name"),
+                        brand=p.get("brand_name"),
+                        category=p.get("category_name"),
+                        tag=p.get("product_performance_label"),
+                        source="category_opportunities",
+                        status="active",
+                    )
+                    db.add(link)
+                    page_created += 1
+                    if pnk:
+                        created_pnks.append(pnk)
+
+                db.commit()
+                created_count += page_created
+                skipped_count += page_skipped
+
+                _dbg("emag_marketplace.py:_run:page_commit", "page committed", {
+                    "page": page,
+                    "products_len": len(products),
+                    "batch_len": len(batch),
+                    "page_created": page_created,
+                    "page_skipped": page_skipped,
+                    "total_created": created_count,
+                    "total_skipped": skipped_count,
+                    "meta": meta,
+                    "created_pnks_count": len(created_pnks),
+                }, "H_commit_page")
+
+                # ---- fetch images + update thumbnail_image (global by PNK) ----
+                # Deduplicate pnks and chunk to 100
+                pnks_unique = []
+                seen = set()
+                for x in created_pnks:
+                    if x and x not in seen:
+                        seen.add(x)
+                        pnks_unique.append(x)
+
+                if pnks_unique:
+                    chunk_size = 100
+                    for i in range(0, len(pnks_unique), chunk_size):
+                        chunk = pnks_unique[i:i+chunk_size]
+                        img_body = {"products": chunk, "resolution": "150x150"}
+                        img_res = page_obj.evaluate(f"""
+                            async () => {{
+                                try {{
+                                    const res = await fetch('https://marketplace.emag.ro/ui/offer/images', {{
+                                        method: 'POST',
+                                        headers: {{
+                                            'content-type': 'application/json',
+                                            'x-requested-with': 'XMLHttpRequest'
+                                        }},
+                                        body: JSON.stringify({json.dumps(img_body)})
+                                    }});
+                                    const status = res.status;
+                                    const text = await res.text();
+                                    try {{ return JSON.parse(text); }} catch(pe) {{ return "ERROR_JS_HTTP" + status + "_" + text.substring(0, 500); }}
+                                }} catch (e) {{
+                                    return "ERROR_JS_" + e.message;
+                                }}
+                            }}
+                        """)
+                        if isinstance(img_res, str) and img_res.startswith("ERROR_JS_"):
+                            _dbg("emag_marketplace.py:_run:images_error", "images fetch error", {
+                                "page": page,
+                                "chunk_len": len(chunk),
+                                "error": img_res[:200],
+                            }, "H_images_error")
+                            continue
+                        if not isinstance(img_res, dict):
+                            _dbg("emag_marketplace.py:_run:images_error", "images response not dict", {
+                                "page": page,
+                                "chunk_len": len(chunk),
+                                "type": type(img_res).__name__,
+                            }, "H_images_error")
+                            continue
+
+                        if img_res.get("isError"):
+                            _dbg("emag_marketplace.py:_run:images_error", "images isError", {
+                                "page": page,
+                                "chunk_len": len(chunk),
+                                "messages": img_res.get("messages"),
+                            }, "H_images_error")
+                            continue
+
+                        results = img_res.get("results") or []
+                        updated = 0
+                        if isinstance(results, list):
+                            for r in results:
+                                if not isinstance(r, dict):
+                                    continue
+                                pnk = r.get("pnk")
+                                url = r.get("imageURL")
+                                if not pnk or not url:
+                                    continue
+                                # global update, only fill empty thumbnail_image
+                                updated += (
+                                    db.query(KeywordLink)
+                                    .filter(
+                                        KeywordLink.pnk_code == pnk,
+                                        (KeywordLink.thumbnail_image.is_(None)) | (KeywordLink.thumbnail_image == "")
+                                    )
+                                    .update({"thumbnail_image": url})
+                                )
+                            db.commit()
+
+                        _dbg("emag_marketplace.py:_run:images_update", "images updated", {
+                            "page": page,
+                            "chunk_len": len(chunk),
+                            "results_len": len(results) if isinstance(results, list) else None,
+                            "rows_updated": updated,
+                        }, "H_images_update")
+
+                        time.sleep(0.4)
+
+            _dbg("emag_marketplace.py:_run:commit", "import finished", {
+                "created": created_count,
+                "skipped": skipped_count,
+                "per_page": per_page,
+                "max_pages": max_pages,
+            }, "H_commit_ok")
+            logger.info(
+                f"[opportunities import] keyword='{keyword_str}' created_keyword={created_keyword} "
+                f"created={created_count} skipped={skipped_count} shop_id={shop_id}"
+            )
+        except Exception as e:
+            db.rollback()
+            _dbg("emag_marketplace.py:_run:exception", "import failed", {
+                "error_type": type(e).__name__,
+                "error": str(e)[:500],
+            }, "H_backend_exception")
+            logger.error(f"[opportunities import] failed: {e}", exc_info=True)
+        finally:
+            try:
+                if browser:
+                    browser.close()
+            except Exception:
+                pass
+            try:
+                if pw:
+                    pw.stop()
+            except Exception:
+                pass
+            try:
+                if shop_id is not None:
+                    emag_marketplace_login_service.set_current_shop_id(old_shop_id)
+            except Exception:
+                pass
+            db.close()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return {"success": True, "message": "opportunities_import_started"}
 
 
 @router.post("/inbound-shipments/sync")

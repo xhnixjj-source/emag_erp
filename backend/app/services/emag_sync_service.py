@@ -525,7 +525,8 @@ class EmagSyncService:
             payload = {
                 "currentPage": current_page,
                 "itemsPerPage": items_per_page,
-                "language": language.upper(),
+                # eMAG language filter can be case-sensitive; keep original value (e.g. 'ro' / 'en')
+                "language": language,
             }
             response = client._make_request("category", "read", payload)
             if response.get("isError"):
