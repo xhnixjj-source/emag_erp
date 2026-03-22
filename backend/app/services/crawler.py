@@ -1337,6 +1337,29 @@ def _rating_for_filter_pool(product_data: Dict[str, Any]) -> Optional[Any]:
     return product_data.get("rating")
 
 
+def _competitor_count_for_filter_pool(
+    product_data: Dict[str, Any], *, for_update: bool = False
+) -> Optional[int]:
+    """
+    写入 FilterPool.competitor_count：
+    - 优先使用爬取结果中的数值（requests+BeautifulSoup 等已解析的跟卖数）；
+    - 否则根据 Playwright 的 has_resellers 映射（无精确数量时 True->1，False->0）；
+    - 更新且两者皆无时返回 None，不覆盖库里的旧 competitor_count。
+    """
+    raw = product_data.get("competitor_count")
+    if raw is not None:
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            pass
+    hr = product_data.get("has_resellers")
+    if hr is True:
+        return 1
+    if hr is False:
+        return 0
+    return None if for_update else 0
+
+
 def crawl_monitor_product(
     monitor_id: int,
     product_url: str,
@@ -1869,6 +1892,9 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
                     setattr(existing, key, value)
             if _rating_for_pool is not None:
                 existing.rating = _rating_for_pool
+            _cc = _competitor_count_for_filter_pool(product_data, for_update=True)
+            if _cc is not None:
+                existing.competitor_count = _cc
             # 更新上架日期（优先使用 keyword_link 中的）
             if final_listed_at:
                 existing.listed_at = final_listed_at
@@ -1904,7 +1930,7 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
                 category_rank=category_rank_value,
                 ad_rank=ad_rank_value,  # 新格式使用ad_category_rank
                 is_fbe=product_data.get('is_fbe', False),
-                competitor_count=product_data.get('competitor_count', 0),
+                competitor_count=_competitor_count_for_filter_pool(product_data, for_update=False),
                 crawled_at=datetime.utcnow()
             )
             db.add(filter_pool_item)
@@ -1916,7 +1942,43 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
             # #endregion
             logger.info(f"[数据保存] 添加新产品数据 - 任务ID: {task_id}, 产品URL: {product_url}")
         
-        
+        # 监控池批量导入：关联筛选池并立即跑一轮监控快照
+        fp_row = db.query(FilterPool).filter(FilterPool.product_url == product_url).first()
+        mp_id = getattr(task, "monitor_pool_id", None)
+        if mp_id and fp_row:
+            from app.models.monitor_pool import MonitorPool, MonitorHistory
+            mon = db.query(MonitorPool).filter(MonitorPool.id == mp_id).first()
+            if mon and mon.product_url == product_url:
+                mon.filter_pool_id = fp_row.id
+                db.commit()
+                db.refresh(mon)
+                try:
+                    pdata = crawl_monitor_product(mon.id, product_url, db)
+                    if pdata:
+                        hist = MonitorHistory(
+                            monitor_pool_id=mon.id,
+                            price=pdata.get("price"),
+                            stock=pdata.get("stock"),
+                            review_count=pdata.get("review_count"),
+                            rating=pdata.get("reviews_score"),
+                            shop_rank=pdata.get("shop_rank"),
+                            category_rank=pdata.get("category_rank"),
+                            ad_rank=pdata.get("ad_rank"),
+                            monitored_at=datetime.utcnow(),
+                        )
+                        db.add(hist)
+                        mon.last_monitored_at = datetime.utcnow()
+                        db.commit()
+                except Exception as snap_err:
+                    logger.warning(
+                        f"[监控导入] 基础爬取后监控快照失败 monitor_id={mp_id} url={product_url}: {snap_err}",
+                        exc_info=True,
+                    )
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+
         # Update task progress
         task.progress = 100
         task.status = TaskStatus.COMPLETED
@@ -2104,6 +2166,9 @@ def batch_crawl_products(
                                 setattr(existing, key, value)
                         if _r_fp is not None:
                             existing.rating = _r_fp
+                        _cc_b = _competitor_count_for_filter_pool(product_data, for_update=True)
+                        if _cc_b is not None:
+                            existing.competitor_count = _cc_b
                         existing.crawled_at = datetime.utcnow()
                     else:
                         # Create new
@@ -2124,7 +2189,7 @@ def batch_crawl_products(
                             category_rank=product_data.get('category_rank'),
                             ad_rank=product_data.get('ad_rank'),
                             is_fbe=product_data.get('is_fbe', False),
-                            competitor_count=product_data.get('competitor_count', 0),
+                            competitor_count=_competitor_count_for_filter_pool(product_data, for_update=False),
                             crawled_at=datetime.utcnow()
                         )
                         db_session.add(filter_pool_item)

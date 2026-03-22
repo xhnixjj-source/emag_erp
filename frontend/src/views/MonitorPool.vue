@@ -5,6 +5,7 @@
         <div class="card-header">
           <span>监控池</span>
           <div>
+            <el-button @click="showUploadDialog = true">上传链接 (.txt)</el-button>
             <el-button type="success" @click="handleMoveToProfit" :loading="movingToProfit" :disabled="selectedProducts.length === 0">
               加入产品库
             </el-button>
@@ -15,6 +16,21 @@
           </div>
         </div>
       </template>
+
+      <div class="toolbar-filters" style="margin-bottom: 12px;">
+        <span style="margin-right: 8px; color: #606266;">自有店铺监控</span>
+        <el-select
+          v-model="filterOwnShop"
+          placeholder="全部"
+          clearable
+          style="width: 160px"
+          @change="onFilterOwnShopChange"
+        >
+          <el-option label="全部" value="" />
+          <el-option label="是" value="yes" />
+          <el-option label="否" value="no" />
+        </el-select>
+      </div>
 
       <!-- 产品列表 -->
       <el-table 
@@ -50,6 +66,13 @@
             <a :href="row.product_url" target="_blank" style="color: #409eff; text-decoration: none;">
               {{ row.product_url }}
             </a>
+          </template>
+        </el-table-column>
+        <el-table-column label="自有店铺" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.is_own_shop ? 'warning' : 'info'" size="small">
+              {{ row.is_own_shop ? '是' : '否' }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="price" label="价格" width="100">
@@ -107,6 +130,7 @@
         v-model:page-size="pageSize"
         :total="total"
         @current-change="loadProducts"
+        @size-change="loadProducts"
         layout="total, prev, pager, next"
         style="margin-top: 20px; flex-shrink: 0;"
       />
@@ -142,6 +166,31 @@
         <el-table-column prop="category_rank" label="类目排名" width="120" />
         <el-table-column prop="ad_rank" label="广告排名" width="120" />
       </el-table>
+    </el-dialog>
+
+    <el-dialog v-model="showUploadDialog" title="上传监控链接 (.txt)" width="520px" @closed="resetUploadDialog">
+      <p style="margin: 0 0 16px; color: #606266; font-size: 13px; line-height: 1.5;">
+        每行一个链接，无需校验格式。重复链接会跳过。导入后为占位行，后台异步写入筛选池数据并执行首轮监控，稍候刷新即可。
+      </p>
+      <el-form label-width="140px">
+        <el-form-item label="本批为自有店铺">
+          <el-switch v-model="uploadOwnShop" />
+        </el-form-item>
+        <el-form-item label="选择 .txt 文件">
+          <input
+            ref="uploadInputRef"
+            type="file"
+            accept=".txt,text/plain"
+            @change="onUploadFileChange"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showUploadDialog = false">取消</el-button>
+        <el-button type="primary" :loading="uploading" :disabled="!uploadFileRaw" @click="submitUpload">
+          上传
+        </el-button>
+      </template>
     </el-dialog>
 
     <!-- 定时任务配置对话框 -->
@@ -201,14 +250,67 @@ const scheduleConfig = reactive({
 const scheduleTime = ref('02:00')
 const savingSchedule = ref(false)
 
+const showUploadDialog = ref(false)
+const uploadOwnShop = ref(false)
+const uploadFileRaw = ref(null)
+const uploadInputRef = ref(null)
+const uploading = ref(false)
+
+const filterOwnShop = ref('')
+
+const onFilterOwnShopChange = () => {
+  page.value = 1
+  loadProducts()
+}
+
+const onUploadFileChange = (e) => {
+  const f = e.target?.files?.[0]
+  uploadFileRaw.value = f || null
+}
+
+const resetUploadDialog = () => {
+  uploadFileRaw.value = null
+  uploadOwnShop.value = false
+  if (uploadInputRef.value) {
+    uploadInputRef.value.value = ''
+  }
+}
+
+const submitUpload = async () => {
+  if (!uploadFileRaw.value) {
+    ElMessage.warning('请选择 .txt 文件')
+    return
+  }
+  uploading.value = true
+  try {
+    const res = await monitorPoolApi.importFromTxt(uploadFileRaw.value, uploadOwnShop.value)
+    ElMessage.success(
+      `新增 ${res.created} 条，跳过重复 ${res.skipped_duplicate} 条，已入队 ${res.queued_tasks} 个任务`
+    )
+    showUploadDialog.value = false
+    await loadProducts()
+  } catch (error) {
+    const msg = error.response?.data?.detail
+    ElMessage.error(typeof msg === 'string' ? msg : '上传失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
 const loadProducts = async () => {
   loading.value = true
   try {
-    
-    const response = await monitorPoolApi.getProducts({
+    const params = {
       page: page.value,
       page_size: pageSize.value
-    })
+    }
+    if (filterOwnShop.value === 'yes') {
+      params.is_own_shop = true
+    } else if (filterOwnShop.value === 'no') {
+      params.is_own_shop = false
+    }
+
+    const response = await monitorPoolApi.getProducts(params)
     
     
     products.value = response.data || response.items || []

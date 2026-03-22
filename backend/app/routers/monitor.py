@@ -1,6 +1,6 @@
 """Monitor pool management API"""
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime
@@ -12,6 +12,8 @@ from sqlalchemy import func, desc
 from app.services.operation_log_service import create_operation_log
 from app.services.scheduler import scheduler, trigger_monitor_manual
 from app.services.crawler import crawl_monitor_product
+from app.services.task_manager import task_manager
+from app.models.crawl_task import TaskType, TaskPriority
 from app.config import config
 
 router = APIRouter(prefix="/api/monitor-pool", tags=["monitor"])
@@ -41,6 +43,7 @@ class MonitorPoolResponse(BaseModel):
     shop_rank: Optional[int] = None
     category_rank: Optional[int] = None
     ad_rank: Optional[int] = None
+    is_own_shop: bool = False
 
     class Config:
         from_attributes = True
@@ -68,9 +71,16 @@ class MonitorPoolListResponse(BaseModel):
     skip: int
     limit: int
 
+class MonitorImportTxtResponse(BaseModel):
+    """Result of bulk import from .txt"""
+    created: int
+    skipped_duplicate: int
+    queued_tasks: int
+
 @router.get("", response_model=MonitorPoolListResponse)
 async def get_monitor_pool(
     status: Optional[str] = None,
+    is_own_shop: Optional[bool] = Query(None, description="筛选：是否自有店铺监控"),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db),
     skip: int = 0,
@@ -95,9 +105,11 @@ async def get_monitor_pool(
     listing_monitor_ids = [lid[0] for lid in listing_monitor_ids]
     
     query = db.query(MonitorPool).filter(
-        MonitorPool.created_by_user_id == current_user["id"],
         MonitorPool.status == MonitorStatus.ACTIVE  # 只显示 ACTIVE 状态的
     )
+
+    if is_own_shop is not None:
+        query = query.filter(MonitorPool.is_own_shop == is_own_shop)
     
     # 排除已进入利润测算的监控项
     if listing_monitor_ids:
@@ -184,6 +196,7 @@ async def get_monitor_pool(
             "shop_rank": latest_history.shop_rank if latest_history else (fp.shop_rank if fp else None),
             "category_rank": latest_history.category_rank if latest_history else (fp.category_rank if fp else None),
             "ad_rank": latest_history.ad_rank if latest_history else (fp.ad_rank if fp else None),
+            "is_own_shop": bool(monitor.is_own_shop),
         }
         converted_monitors.append(MonitorPoolResponse(**monitor_dict))
     
@@ -196,6 +209,99 @@ async def get_monitor_pool(
     
     
     return response
+
+
+@router.post("/import-from-txt", response_model=MonitorImportTxtResponse)
+async def import_monitor_from_txt(
+    file: UploadFile = File(...),
+    is_own_shop: bool = Form(False),
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """
+    从 .txt 批量导入监控链接：每行一个 URL，去重后写入监控池并入队产品爬取任务；
+    任务完成后会写入筛选池、关联监控并自动跑一轮监控快照。
+    """
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1", errors="replace")
+
+    lines = []
+    for line in text.splitlines():
+        u = line.strip()
+        if u:
+            lines.append(u)
+
+    seen_file: set = set()
+    ordered: List[str] = []
+    for u in lines:
+        if u not in seen_file:
+            seen_file.add(u)
+            ordered.append(u)
+
+    if not ordered:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="文件中没有有效链接",
+        )
+
+    existing_rows = db.query(MonitorPool.product_url).filter(
+        MonitorPool.product_url.in_(ordered)
+    ).all()
+    existing_urls = {r[0] for r in existing_rows}
+
+    created = 0
+    skipped_duplicate = 0
+    queued_tasks = 0
+
+    for url in ordered:
+        if url in existing_urls:
+            skipped_duplicate += 1
+            continue
+        monitor = MonitorPool(
+            product_url=url,
+            created_by_user_id=current_user["id"],
+            status=MonitorStatus.ACTIVE,
+            is_own_shop=is_own_shop,
+        )
+        db.add(monitor)
+        db.flush()
+        task_manager.add_task(
+            task_type=TaskType.PRODUCT_CRAWL,
+            user_id=current_user["id"],
+            priority=TaskPriority.NORMAL,
+            product_url=url,
+            monitor_pool_id=monitor.id,
+            db=db,
+        )
+        existing_urls.add(url)
+        created += 1
+        queued_tasks += 1
+
+    db.commit()
+
+    create_operation_log(
+        db=db,
+        user_id=current_user["id"],
+        operation_type="monitor_import_txt",
+        target_type="monitor_pool",
+        target_id=None,
+        operation_detail={
+            "created": created,
+            "skipped_duplicate": skipped_duplicate,
+            "queued_tasks": queued_tasks,
+            "is_own_shop": is_own_shop,
+        },
+    )
+
+    return MonitorImportTxtResponse(
+        created=created,
+        skipped_duplicate=skipped_duplicate,
+        queued_tasks=queued_tasks,
+    )
+
 
 @router.get("/{monitor_id}/history", response_model=List[MonitorHistoryResponse])
 async def get_monitor_history(
@@ -212,12 +318,6 @@ async def get_monitor_history(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Monitor not found"
-        )
-    
-    if monitor.created_by_user_id != current_user["id"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to view this monitor"
         )
     
     history = db.query(MonitorHistory).filter(
@@ -255,12 +355,6 @@ async def trigger_monitor(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Monitor not found"
-        )
-    
-    if monitor.created_by_user_id != current_user["id"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to trigger this monitor"
         )
     
     if monitor.status != MonitorStatus.ACTIVE:
@@ -326,12 +420,6 @@ async def update_monitor_status(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Monitor not found"
-        )
-    
-    if monitor.created_by_user_id != current_user["id"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to update this monitor"
         )
     
     try:
@@ -513,10 +601,9 @@ async def add_to_monitor_pool(
             detail="product_url is required"
         )
     
-    # Check if already exists
+    # Check if already exists（全局按 URL 去重）
     existing = db.query(MonitorPool).filter(
-        MonitorPool.product_url == product_url,
-        MonitorPool.created_by_user_id == current_user["id"]
+        MonitorPool.product_url == product_url
     ).first()
     
     if existing:
@@ -528,7 +615,8 @@ async def add_to_monitor_pool(
     monitor = MonitorPool(
         product_url=product_url,
         created_by_user_id=current_user["id"],
-        status=MonitorStatus.ACTIVE
+        status=MonitorStatus.ACTIVE,
+        is_own_shop=False,
     )
     db.add(monitor)
     db.commit()
@@ -552,7 +640,8 @@ async def add_to_monitor_pool(
         "status": monitor.status.value if hasattr(monitor.status, 'value') else str(monitor.status),
         "created_by_user_id": monitor.created_by_user_id,
         "last_monitored_at": monitor.last_monitored_at.isoformat() if monitor.last_monitored_at and isinstance(monitor.last_monitored_at, datetime) else (str(monitor.last_monitored_at) if monitor.last_monitored_at else None),
-        "created_at": monitor.created_at.isoformat() if monitor.created_at and isinstance(monitor.created_at, datetime) else (str(monitor.created_at) if monitor.created_at else "")
+        "created_at": monitor.created_at.isoformat() if monitor.created_at and isinstance(monitor.created_at, datetime) else (str(monitor.created_at) if monitor.created_at else ""),
+        "is_own_shop": bool(monitor.is_own_shop),
     }
     
     return MonitorPoolResponse(**monitor_dict)
@@ -569,12 +658,6 @@ async def remove_from_monitor_pool(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Monitor not found"
-        )
-    
-    if monitor.created_by_user_id != current_user["id"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to remove this monitor"
         )
     
     # Log operation

@@ -79,6 +79,7 @@ class TaskManager:
         priority: TaskPriority = TaskPriority.NORMAL,
         keyword_id: Optional[int] = None,
         product_url: Optional[str] = None,
+        monitor_pool_id: Optional[int] = None,
         max_retries: int = 5,
         db: Optional[Session] = None
     ) -> int:
@@ -103,6 +104,7 @@ class TaskManager:
             priority=priority,
             keyword_id=keyword_id,
             product_url=product_url,
+            monitor_pool_id=monitor_pool_id,
             max_retries=max_retries,
             db=db
         )

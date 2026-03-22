@@ -46,6 +46,7 @@ class CrawlTask(Base):
     id = Column(Integer, primary_key=True, index=True)
     task_type = Column(Enum(TaskType), nullable=False, index=True)
     keyword_id = Column(Integer, ForeignKey("keywords.id"), nullable=True)
+    monitor_pool_id = Column(Integer, ForeignKey("monitor_pool.id"), nullable=True, index=True)
     product_url = Column(String, nullable=True)
     status = Column(Enum(TaskStatus), default=TaskStatus.PENDING, nullable=False, index=True)
     priority = Column(Enum(TaskPriority), default=TaskPriority.NORMAL, nullable=False)

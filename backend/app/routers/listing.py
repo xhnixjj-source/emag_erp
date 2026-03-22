@@ -133,10 +133,9 @@ async def add_to_listing(
     """Add products from monitor pool to listing pool"""
     
     try:
-        # Get monitor pool products
+        # Get monitor pool products（与监控池一致：不按创建人隔离）
         monitors = db.query(MonitorPool).filter(
-            MonitorPool.id.in_(request.monitor_pool_ids),
-            MonitorPool.created_by_user_id == current_user["id"]
+            MonitorPool.id.in_(request.monitor_pool_ids)
         ).all()
         
         

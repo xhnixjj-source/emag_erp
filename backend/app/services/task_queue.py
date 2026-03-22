@@ -39,6 +39,7 @@ class TaskQueue:
         priority: TaskPriority = TaskPriority.NORMAL,
         keyword_id: Optional[int] = None,
         product_url: Optional[str] = None,
+        monitor_pool_id: Optional[int] = None,
         max_retries: int = 5,
         db: Optional[Session] = None
     ) -> int:
@@ -63,6 +64,7 @@ class TaskQueue:
             task = CrawlTask(
                 task_type=task_type,
                 keyword_id=keyword_id,
+                monitor_pool_id=monitor_pool_id,
                 product_url=product_url,
                 status=TaskStatus.PENDING,
                 priority=priority,

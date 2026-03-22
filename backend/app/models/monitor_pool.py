@@ -1,5 +1,5 @@
 """Monitor pool models"""
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Enum, Boolean
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 import enum
@@ -19,6 +19,7 @@ class MonitorPool(Base):
     id = Column(Integer, primary_key=True, index=True)
     filter_pool_id = Column(Integer, ForeignKey("filter_pool.id"), nullable=True)
     product_url = Column(String, nullable=False, index=True)
+    is_own_shop = Column(Boolean, default=False, nullable=False)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     last_monitored_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(Enum(MonitorStatus), default=MonitorStatus.ACTIVE, nullable=False)
