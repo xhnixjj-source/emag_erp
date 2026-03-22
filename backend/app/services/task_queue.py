@@ -170,9 +170,11 @@ class TaskQueue:
                 with self._lock:
                     if task_id in self._task_map:
                         self._task_map[task_id] = task
-        except Exception as e:
-            if should_close:
+        except Exception:
+            try:
                 db.rollback()
+            except Exception:
+                pass
             raise
         finally:
             if should_close:
@@ -196,9 +198,11 @@ class TaskQueue:
                 with self._lock:
                     if task_id in self._task_map:
                         self._task_map[task_id] = task
-        except Exception as e:
-            if should_close:
+        except Exception:
+            try:
                 db.rollback()
+            except Exception:
+                pass
             raise
         finally:
             if should_close:

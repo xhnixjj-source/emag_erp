@@ -1328,6 +1328,15 @@ def _parse_date(date_text: str) -> Optional[datetime]:
     
     return None
 
+
+def _rating_for_filter_pool(product_data: Dict[str, Any]) -> Optional[Any]:
+    """FilterPool 使用列 rating；Playwright 动态字段为 reviews_score，旧 BS 路径可能为 rating。"""
+    r = product_data.get("reviews_score")
+    if r is not None:
+        return r
+    return product_data.get("rating")
+
+
 def crawl_monitor_product(
     monitor_id: int,
     product_url: str,
@@ -1345,7 +1354,8 @@ def crawl_monitor_product(
         db: Database session
         
     Returns:
-        Crawled product data (仅包含6个核心监控字段) or None if failed
+        归一化后的监控字段 dict（与 scheduler / 路由写入 MonitorHistory 的键一致），失败返回 None。
+        字段：price, stock, review_count, reviews_score, shop_rank, category_rank, ad_rank
     """
     try:
         # 从MonitorPool获取filter_pool_id，然后从FilterPool获取链接
@@ -1382,11 +1392,12 @@ def crawl_monitor_product(
         )
         
         if product_data:
-            # 只返回6个核心监控字段：价格、库存、评分、店铺排名、类目排名、广告排名
+            # 与 MonitorHistory / scheduler 约定一致的归一化字段（爬虫原始键在此统一映射）
             filtered_data = {
                 'price': product_data.get('price'),
                 'stock': product_data.get('stock_count') or product_data.get('stock'),
-                'reviews_score': product_data.get('reviews_score'),  # 评分
+                'review_count': product_data.get('review_count'),
+                'reviews_score': product_data.get('reviews_score'),
                 'shop_rank': product_data.get('store_rank') or product_data.get('shop_rank'),
                 'category_rank': product_data.get('category_rank'),
                 'ad_rank': product_data.get('ad_category_rank') or product_data.get('ad_rank'),
@@ -1841,6 +1852,8 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
         existing = db.query(FilterPool).filter(
             FilterPool.product_url == product_url
         ).first()
+
+        _rating_for_pool = _rating_for_filter_pool(product_data)
         
         if existing:
             # Update existing record
@@ -1854,6 +1867,8 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
             for key, value in product_data.items():
                 if key != 'product_url' and hasattr(existing, key):
                     setattr(existing, key, value)
+            if _rating_for_pool is not None:
+                existing.rating = _rating_for_pool
             # 更新上架日期（优先使用 keyword_link 中的）
             if final_listed_at:
                 existing.listed_at = final_listed_at
@@ -1882,6 +1897,7 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
                 listed_at=final_listed_at,  # 优先使用 keyword_link 中的上架日期
                 stock=product_data.get('stock_count') or product_data.get('stock'),  # 新格式使用stock_count
                 review_count=product_data.get('review_count'),
+                rating=_rating_for_pool,
                 latest_review_at=product_data.get('latest_review_date') or product_data.get('latest_review_at'),  # 新格式使用latest_review_date
                 earliest_review_at=product_data.get('earliest_review_at'),
                 shop_rank=shop_rank_value,  # 新格式使用store_rank
@@ -2076,6 +2092,7 @@ def batch_crawl_products(
                 # Save to filter_pool
                 db_session = SessionLocal()
                 try:
+                    _r_fp = _rating_for_filter_pool(product_data)
                     existing = db_session.query(FilterPool).filter(
                         FilterPool.product_url == product_url
                     ).first()
@@ -2085,6 +2102,8 @@ def batch_crawl_products(
                         for key, value in product_data.items():
                             if key != 'product_url' and hasattr(existing, key):
                                 setattr(existing, key, value)
+                        if _r_fp is not None:
+                            existing.rating = _r_fp
                         existing.crawled_at = datetime.utcnow()
                     else:
                         # Create new
@@ -2098,6 +2117,7 @@ def batch_crawl_products(
                             listed_at=product_data.get('listed_at'),
                             stock=product_data.get('stock'),
                             review_count=product_data.get('review_count'),
+                            rating=_r_fp,
                             latest_review_at=product_data.get('latest_review_at'),
                             earliest_review_at=product_data.get('earliest_review_at'),
                             shop_rank=product_data.get('shop_rank'),
@@ -2186,246 +2206,3 @@ def batch_crawl_keyword_links(
         "crawled": successful,
         "failed": failed
     }
-
-
-# ============================================================================
-# Batch Crawling Functions (Multi-threaded)
-# ============================================================================
-
-def batch_crawl_keywords(
-    keyword_ids: List[int],
-    db: Session,
-    max_workers: Optional[int] = None
-) -> Dict[int, Dict[str, Any]]:
-    """
-    Batch crawl multiple keywords concurrently using thread pool
-    
-    Args:
-        keyword_ids: List of keyword IDs to crawl
-        db: Database session
-        max_workers: Maximum number of worker threads (default from config)
-        
-    Returns:
-        Dictionary mapping keyword_id to results
-    """
-    results = {}
-    
-    def _crawl_single_keyword(keyword_id: int) -> tuple:
-        """Crawl a single keyword"""
-        db_session = SessionLocal()
-        try:
-            keyword = db_session.query(Keyword).filter(Keyword.id == keyword_id).first()
-            if not keyword:
-                return keyword_id, {"error": "Keyword not found"}
-            
-            # Create a temporary task for progress tracking
-            task = CrawlTask(
-                task_type=TaskType.KEYWORD_SEARCH,
-                keyword_id=keyword_id,
-                user_id=keyword.created_by_user_id,
-                status=TaskStatus.PROCESSING,
-                priority=TaskPriority.NORMAL
-            )
-            db_session.add(task)
-            db_session.commit()
-            db_session.refresh(task)
-            
-            try:
-                result = handle_keyword_search_task(task.id, task, db_session)
-                return keyword_id, result
-            except Exception as e:
-                logger.error(f"Error crawling keyword {keyword_id}: {e}")
-                return keyword_id, {"error": str(e)}
-        finally:
-            db_session.close()
-    
-    # Use thread pool for concurrent crawling
-    pool_name = "keyword_search"
-    if max_workers is None:
-        max_workers = config.KEYWORD_SEARCH_THREADS
-    
-    futures = []
-    for keyword_id in keyword_ids:
-        future = thread_pool_manager.submit(pool_name, _crawl_single_keyword, keyword_id)
-        futures.append(future)
-    
-    # Collect results
-    for future in as_completed(futures):
-        try:
-            keyword_id, result = future.result()
-            results[keyword_id] = result
-        except Exception as e:
-            logger.error(f"Error getting result from keyword crawl: {e}")
-    
-    return results
-
-def batch_crawl_products(
-    product_urls: List[str],
-    db: Session,
-    max_workers: Optional[int] = None,
-    task_id: Optional[int] = None
-) -> Dict[str, Optional[Dict[str, Any]]]:
-    """
-    Batch crawl multiple products concurrently using thread pool
-    
-    Args:
-        product_urls: List of product URLs to crawl
-        db: Database session
-        max_workers: Maximum number of worker threads (default from config)
-        task_id: Optional parent task ID for progress tracking
-        
-    Returns:
-        Dictionary mapping product_url to crawled data (or None if failed)
-    """
-    results = {}
-    
-    def _crawl_single_product(product_url: str) -> tuple:
-        """Crawl a single product"""
-        db_session = SessionLocal()
-        try:
-            product_data = crawl_product_details(
-                product_url=product_url,
-                task_id=task_id,
-                db=db_session
-            )
-            return product_url, product_data
-        except Exception as e:
-            logger.error(f"Error crawling product {product_url}: {e}")
-            return product_url, None
-        finally:
-            db_session.close()
-    
-    # Use thread pool for concurrent crawling
-    pool_name = "product_crawl"
-    if max_workers is None:
-        max_workers = config.PRODUCT_CRAWL_THREADS
-    
-    futures = []
-    for url in product_urls:
-        future = thread_pool_manager.submit(pool_name, _crawl_single_product, url)
-        futures.append(future)
-    
-    # Collect results and save to database
-    successful_count = 0
-    failed_count = 0
-    
-    for future in as_completed(futures):
-        try:
-            product_url, product_data = future.result()
-            results[product_url] = product_data
-            
-            if product_data:
-                # Save to filter_pool
-                db_session = SessionLocal()
-                try:
-                    existing = db_session.query(FilterPool).filter(
-                        FilterPool.product_url == product_url
-                    ).first()
-                    
-                    if existing:
-                        # Update existing
-                        for key, value in product_data.items():
-                            if key != 'product_url' and hasattr(existing, key):
-                                setattr(existing, key, value)
-                        existing.crawled_at = datetime.utcnow()
-                    else:
-                        # Create new
-                        filter_pool_item = FilterPool(
-                            product_url=product_data['product_url'],
-                            product_name=product_data.get('product_name'),
-                            thumbnail_image=product_data.get('thumbnail_image'),
-                            brand=product_data.get('brand'),
-                            shop_name=product_data.get('shop_name'),
-                            price=product_data.get('price'),
-                            listed_at=product_data.get('listed_at'),
-                            stock=product_data.get('stock'),
-                            review_count=product_data.get('review_count'),
-                            latest_review_at=product_data.get('latest_review_at'),
-                            earliest_review_at=product_data.get('earliest_review_at'),
-                            shop_rank=product_data.get('shop_rank'),
-                            category_rank=product_data.get('category_rank'),
-                            ad_rank=product_data.get('ad_rank'),
-                            is_fbe=product_data.get('is_fbe', False),
-                            competitor_count=product_data.get('competitor_count', 0),
-                            crawled_at=datetime.utcnow()
-                        )
-                        db_session.add(filter_pool_item)
-                    
-                    db_session.commit()
-                    successful_count += 1
-                except Exception as e:
-                    logger.error(f"Error saving product {product_url} to database: {e}")
-                    db_session.rollback()
-                    failed_count += 1
-                finally:
-                    db_session.close()
-            else:
-                failed_count += 1
-                
-        except Exception as e:
-            logger.error(f"Error getting result from product crawl: {e}")
-            failed_count += 1
-    
-    logger.info(
-        f"Batch product crawl completed: {successful_count} successful, "
-        f"{failed_count} failed out of {len(product_urls)} total"
-    )
-    
-    return results
-
-def batch_crawl_keyword_links(
-    keyword_id: int,
-    db: Session,
-    max_workers: Optional[int] = None,
-    batch_size: Optional[int] = None
-) -> Dict[str, Any]:
-    """
-    Batch crawl all product links for a keyword
-    
-    Args:
-        keyword_id: Keyword ID
-        db: Database session
-        max_workers: Maximum number of worker threads
-        batch_size: Number of URLs to process in each batch (for memory management)
-        
-    Returns:
-        Dictionary with crawl statistics
-    """
-    # Get all links for keyword
-    links = db.query(KeywordLink).filter(
-        KeywordLink.keyword_id == keyword_id,
-        KeywordLink.status == "active"
-    ).all()
-    
-    if not links:
-        return {
-            "keyword_id": keyword_id,
-            "total_links": 0,
-            "crawled": 0,
-            "failed": 0
-        }
-    
-    product_urls = [link.product_url for link in links]
-    
-    # Use batch processing if batch_size is specified
-    if batch_size:
-        all_results = {}
-        for i in range(0, len(product_urls), batch_size):
-            batch = product_urls[i:i + batch_size]
-            batch_results = batch_crawl_products(batch, db, max_workers=max_workers)
-            all_results.update(batch_results)
-        results = all_results
-    else:
-        results = batch_crawl_products(product_urls, db, max_workers=max_workers)
-    
-    # Calculate statistics
-    successful = sum(1 for v in results.values() if v is not None)
-    failed = len(results) - successful
-    
-    return {
-        "keyword_id": keyword_id,
-        "total_links": len(product_urls),
-        "crawled": successful,
-        "failed": failed
-    }
-

@@ -29,30 +29,8 @@ def start_scheduler():
         max_instances=1,
     )
 
-    # Register listed_at backfill task (interval, every N minutes)
-    if getattr(config, "LISTED_AT_BACKFILL_ENABLED", True):
-        scheduler.add_job(
-            func=run_listed_at_backfill_job,
-            trigger="interval",
-            minutes=config.LISTED_AT_BACKFILL_INTERVAL_MINUTES,
-            id="listed_at_backfill",
-            replace_existing=True,
-            max_instances=1,  # 保证上一次没完成不会并发
-            coalesce=True,  # 合并错过的触发
-        )
-        logger.info(
-            "Scheduler listed_at_backfill task scheduled every %s minutes",
-            config.LISTED_AT_BACKFILL_INTERVAL_MINUTES,
-        )
-        # 在服务启动时立即先跑一轮 listed_at 回填
-        scheduler.add_job(
-            func=run_listed_at_backfill_job,
-            trigger="date",
-            run_date=datetime.now(),
-            id="listed_at_backfill_bootstrap",
-            replace_existing=True,
-            max_instances=1,
-        )
+    # 上架日期 FilterPool 回填：已关闭 APScheduler 定时任务（不注册 interval / 启动 bootstrap）。
+    # 需要时可调用 run_listed_at_backfill_job() 手动跑；恢复定时需在此重新 add_job。
 
     logger.info(
         "Scheduler started. Daily monitor task scheduled at %02d:%02d",
@@ -215,18 +193,16 @@ def _crawl_single_monitor(monitor_id: int, product_url: str) -> bool:
             logger.warning(f"Failed to crawl product data for monitor {monitor_id}")
             return False
         
-        # Create monitor history record
-        # 注意：ProductDataCrawler返回的字段名可能与MonitorHistory不同，需要映射
-        # 只保存6个核心监控字段：价格、库存、评分、店铺排名、类目排名、广告排名
+        # crawl_monitor_product 已返回归一化 dict，键名与 MonitorHistory 一致
         history = MonitorHistory(
             monitor_pool_id=monitor_id,
             price=product_data.get('price'),
-            stock=product_data.get('stock_count') or product_data.get('stock'),  # 新格式使用stock_count
-            review_count=product_data.get('review_count'),  # 保留review_count用于兼容
-            rating=product_data.get('reviews_score'),  # 评分字段
-            shop_rank=product_data.get('store_rank') or product_data.get('shop_rank'),  # 新格式使用store_rank
+            stock=product_data.get('stock'),
+            review_count=product_data.get('review_count'),
+            rating=product_data.get('reviews_score'),
+            shop_rank=product_data.get('shop_rank'),
             category_rank=product_data.get('category_rank'),
-            ad_rank=product_data.get('ad_category_rank') or product_data.get('ad_rank'),  # 新格式使用ad_category_rank
+            ad_rank=product_data.get('ad_rank'),
             monitored_at=datetime.utcnow()
         )
         

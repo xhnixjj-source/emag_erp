@@ -269,8 +269,10 @@ class RetryManager:
                 return error_log.id
         except Exception as e:
             logger.error(f"Failed to log error: {e}")
-            if should_close:
+            try:
                 db.rollback()
+            except Exception:
+                pass
             raise
         finally:
             if should_close:

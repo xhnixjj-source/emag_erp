@@ -147,6 +147,13 @@ class TaskManager:
                 )
                 return
             
+            # 在 commit(PROCESSING) 之前缓存，避免 Session 过期或失败后访问 ORM 再触发懒加载
+            task_type_for_log = (
+                task.task_type.value
+                if isinstance(task.task_type, TaskType)
+                else str(task.task_type)
+            )
+
             # Update status to processing
             self.task_queue.update_task_status(task_id, TaskStatus.PROCESSING, db=db)
             
@@ -157,36 +164,53 @@ class TaskManager:
             # Execute task
             try:
                 task_url = getattr(task, 'product_url', None) or (f"关键字ID: {task.keyword_id}" if task.keyword_id else "未知")
-                print(f"[任务执行] 调用任务处理器 - 任务ID: {task_id}, 任务类型: {task.task_type}, 目标: {task_url}")
-                logger.info(f"[任务执行] 调用任务处理器 - 任务ID: {task_id}, 任务类型: {task.task_type}, 目标: {task_url}")
+                print(f"[任务执行] 调用任务处理器 - 任务ID: {task_id}, 任务类型: {task_type_for_log}, 目标: {task_url}")
+                logger.info(f"[任务执行] 调用任务处理器 - 任务ID: {task_id}, 任务类型: {task_type_for_log}, 目标: {task_url}")
                 result = handler(task_id, task, db)
                 
                 
                 # Mark as completed
                 self.task_queue.update_task_status(task_id, TaskStatus.COMPLETED, db=db)
                 elapsed = time.time() - start_time
-                logger.info(f"[任务执行] 任务执行完成 - 任务ID: {task_id}, 任务类型: {task.task_type}, 耗时: {elapsed:.2f}秒")
+                logger.info(f"[任务执行] 任务执行完成 - 任务ID: {task_id}, 任务类型: {task_type_for_log}, 耗时: {elapsed:.2f}秒")
                 
             except Exception as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[任务执行] 任务执行失败 - 任务ID: {task_id}, 任务类型: {task.task_type}, 错误: {str(e)}, 耗时: {elapsed:.2f}秒", exc_info=True)
-                
-                # 记录错误到ErrorLog（如果还没有记录）
+                # 解除失败事务，避免同 Session 已失效时无法继续写库
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+                logger.error(
+                    f"[任务执行] 任务执行失败 - 任务ID: {task_id}, 任务类型: {task_type_for_log}, "
+                    f"错误: {str(e)}, 耗时: {elapsed:.2f}秒",
+                    exc_info=True,
+                )
+
+                # 使用独立 Session 写入，避免 sqlite locked 等导致原 Session 损坏后 FAILED/ErrorLog 落库失败
                 try:
                     from app.services.retry_manager import retry_manager
-                    from app.models.crawl_task import ErrorType
                     error_type = retry_manager.classify_error(e)
-                    retry_manager.log_error(task_id, e, error_type, db=db)
+                    retry_manager.log_error(task_id, e, error_type, db=None)
                 except Exception as log_err:
-                    logger.error(f"记录任务错误失败: {log_err}")
-                
-                # 不立即重试，标记为FAILED，等待批量重试
-                self.task_queue.update_task_status(
-                    task_id, TaskStatus.FAILED,
-                    error_message=f"Task failed: {str(e)[:500]}",
-                    db=db
-                )
-                logger.info(f"Task {task_id} marked as FAILED, will be retried in batch retry phase")
+                    logger.error(f"记录任务错误失败: {log_err}", exc_info=True)
+
+                try:
+                    self.task_queue.update_task_status(
+                        task_id,
+                        TaskStatus.FAILED,
+                        error_message=f"Task failed: {str(e)[:500]}",
+                        db=None,
+                    )
+                    logger.info(
+                        f"Task {task_id} marked as FAILED, will be retried in batch retry phase"
+                    )
+                except Exception as status_err:
+                    logger.error(
+                        f"[任务执行] 标记任务为 FAILED 写入失败 task_id={task_id}: {status_err}",
+                        exc_info=True,
+                    )
         
         except Exception as e:
             logger.error(f"Error executing task {task_id}: {e}", exc_info=True)

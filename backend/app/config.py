@@ -117,8 +117,8 @@ class Config:
     SCHEDULER_TIMEZONE: str = os.getenv("SCHEDULER_TIMEZONE", "Asia/Shanghai")
     MONITOR_SCHEDULE_HOUR: int = int(os.getenv("MONITOR_SCHEDULE_HOUR", "2"))
     MONITOR_SCHEDULE_MINUTE: int = int(os.getenv("MONITOR_SCHEDULE_MINUTE", "0"))
-    # Listed_at backfill task configuration
-    LISTED_AT_BACKFILL_ENABLED: bool = os.getenv("LISTED_AT_BACKFILL_ENABLED", "true").lower() == "true"
+    # Listed_at backfill task configuration（默认关闭；scheduler 已不再注册定时回填）
+    LISTED_AT_BACKFILL_ENABLED: bool = os.getenv("LISTED_AT_BACKFILL_ENABLED", "false").lower() == "true"
     LISTED_AT_BACKFILL_INTERVAL_MINUTES: int = int(os.getenv("LISTED_AT_BACKFILL_INTERVAL_MINUTES", "5"))
     LISTED_AT_BATCH_SIZE: int = int(os.getenv("LISTED_AT_BATCH_SIZE", "50"))
     LISTED_AT_SLEEP_SECONDS: float = float(os.getenv("LISTED_AT_SLEEP_SECONDS", "0.5"))
