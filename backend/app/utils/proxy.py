@@ -6,7 +6,7 @@ import time
 import json
 import threading
 from typing import Optional, List, Dict
-from app.config import config, get_debug_log_path
+from app.config import config
 
 logger = logging.getLogger(__name__)
 

@@ -15,19 +15,11 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password"""
+    """Verify password (bcrypt hash)."""
     try:
-        # Handle both passlib format and raw bcrypt format
-        if hashed_password.startswith('$2b$') or hashed_password.startswith('$2a$') or hashed_password.startswith('$2y$'):
-            # Raw bcrypt hash
-            password_bytes = plain_password.encode('utf-8')
-            hash_bytes = hashed_password.encode('utf-8')
-            return bcrypt.checkpw(password_bytes, hash_bytes)
-        else:
-            # Passlib format (shouldn't happen with new code, but for compatibility)
-            password_bytes = plain_password.encode('utf-8')
-            hash_bytes = hashed_password.encode('utf-8')
-            return bcrypt.checkpw(password_bytes, hash_bytes)
+        password_bytes = plain_password.encode('utf-8')
+        hash_bytes = hashed_password.encode('utf-8')
+        return bcrypt.checkpw(password_bytes, hash_bytes)
     except Exception:
         return False
 

@@ -103,150 +103,127 @@ async def get_filter_pool(
 ):
     """Get filter pool with filters"""
     
-    try:
-        query = db.query(FilterPool)
+    query = db.query(FilterPool)
 
-        # 兼容 axios 对数组参数使用 exclude_xxx[] 的情况
-        if (not exclude_brands) and exclude_brands_brackets:
-            exclude_brands = exclude_brands_brackets
-        if (not exclude_shops) and exclude_shops_brackets:
-            exclude_shops = exclude_shops_brackets
-        
-        # Apply filters（所有条件联动按 AND 过滤）
-        if min_price is not None:
-            query = query.filter(FilterPool.price >= min_price)
-        if max_price is not None:
-            query = query.filter(FilterPool.price <= max_price)
-        if min_review_count is not None:
-            query = query.filter(FilterPool.review_count >= min_review_count)
-        if max_review_count is not None:
-            query = query.filter(FilterPool.review_count <= max_review_count)
-        if min_rating is not None:
-            query = query.filter(FilterPool.rating >= min_rating)
-        if max_rating is not None:
-            query = query.filter(FilterPool.rating <= max_rating)
-        if min_shop_rank is not None:
-            query = query.filter(FilterPool.shop_rank >= min_shop_rank)
-        if max_shop_rank is not None:
-            query = query.filter(FilterPool.shop_rank <= max_shop_rank)
-        if min_category_rank is not None:
-            query = query.filter(FilterPool.category_rank >= min_category_rank)
-        if max_category_rank is not None:
-            query = query.filter(FilterPool.category_rank <= max_category_rank)
-        if has_stock is not None:
-            if has_stock:
-                query = query.filter(FilterPool.stock > 0)
-            else:
-                query = query.filter(or_(FilterPool.stock == 0, FilterPool.stock.is_(None)))
-
-        # 上架日期筛选：逻辑与链接初筛保持一致
-        if listed_at_period:
-            now = datetime.utcnow()
-            start_date = None
-            if listed_at_period == "6months":
-                start_date = now - timedelta(days=180)
-            elif listed_at_period == "1year":
-                start_date = now - timedelta(days=365)
-            elif listed_at_period == "1.5years":
-                start_date = now - timedelta(days=547)
-
-            if start_date:
-                # 成功获取且在时间范围内，或已去爬但未获取到（not_found/error），排除 pending
-                query = query.filter(
-                    or_(
-                        and_(
-                            FilterPool.listed_at_status == "success",
-                            FilterPool.listed_at >= start_date,
-                        ),
-                        FilterPool.listed_at_status.in_(["not_found", "error"]),
-                    )
-                )
-
-        # 品牌剔除：逻辑与链接初筛保持一致，保留 brand 为 NULL 的记录
-        if exclude_brands:
-            query = query.filter(
-                or_(
-                    FilterPool.brand.is_(None),
-                    ~FilterPool.brand.in_(exclude_brands),
-                )
-            )
-
-        # 店铺剔除：与品牌剔除逻辑一致，保留 shop_name 为 NULL 的记录
-        if exclude_shops:
-            query = query.filter(
-                or_(
-                    FilterPool.shop_name.is_(None),
-                    ~FilterPool.shop_name.in_(exclude_shops),
-                )
-            )
+    # 兼容 axios 对数组参数使用 exclude_xxx[] 的情况
+    if (not exclude_brands) and exclude_brands_brackets:
+        exclude_brands = exclude_brands_brackets
+    if (not exclude_shops) and exclude_shops_brackets:
+        exclude_shops = exclude_shops_brackets
     
-        
-        # Get total count
-        total = query.count()
-        
-        
-        # Get paginated results
-        products = query.order_by(FilterPool.crawled_at.desc()).offset(skip).limit(limit).all()
-        
-        
-        # Convert datetime fields to strings for response
-        converted_products = []
-        for product in products:
-            product_dict = {
-                "id": product.id,
-                "product_url": product.product_url,
-                "product_name": product.product_name,
-                "thumbnail_image": product.thumbnail_image,
-                "brand": product.brand,
-                "shop_name": product.shop_name,
-                "price": product.price,
-                "rating": product.rating,
-                "stock": product.stock,
-                "review_count": product.review_count,
-                "shop_rank": product.shop_rank,
-                "category_rank": product.category_rank,
-                "ad_rank": product.ad_rank,
-                "is_fbe": product.is_fbe,
-                "competitor_count": product.competitor_count,
-                "listed_at": product.listed_at.isoformat() if product.listed_at and isinstance(product.listed_at, datetime) else (str(product.listed_at) if product.listed_at else None),
-                "latest_review_at": product.latest_review_at.isoformat() if product.latest_review_at and isinstance(product.latest_review_at, datetime) else (str(product.latest_review_at) if product.latest_review_at else None),
-                "earliest_review_at": product.earliest_review_at.isoformat() if product.earliest_review_at and isinstance(product.earliest_review_at, datetime) else (str(product.earliest_review_at) if product.earliest_review_at else None),
-                "crawled_at": product.crawled_at.isoformat() if product.crawled_at and isinstance(product.crawled_at, datetime) else (str(product.crawled_at) if product.crawled_at else "")
-            }
-            converted_products.append(FilterPoolResponse(**product_dict))
-        
-        
-        response = FilterPoolListResponse(
-            items=converted_products,
-            total=total,
-            skip=skip,
-            limit=limit
+    # Apply filters（所有条件联动按 AND 过滤）
+    if min_price is not None:
+        query = query.filter(FilterPool.price >= min_price)
+    if max_price is not None:
+        query = query.filter(FilterPool.price <= max_price)
+    if min_review_count is not None:
+        query = query.filter(FilterPool.review_count >= min_review_count)
+    if max_review_count is not None:
+        query = query.filter(FilterPool.review_count <= max_review_count)
+    if min_rating is not None:
+        query = query.filter(FilterPool.rating >= min_rating)
+    if max_rating is not None:
+        query = query.filter(FilterPool.rating <= max_rating)
+    if min_shop_rank is not None:
+        query = query.filter(FilterPool.shop_rank >= min_shop_rank)
+    if max_shop_rank is not None:
+        query = query.filter(FilterPool.shop_rank <= max_shop_rank)
+    if min_category_rank is not None:
+        query = query.filter(FilterPool.category_rank >= min_category_rank)
+    if max_category_rank is not None:
+        query = query.filter(FilterPool.category_rank <= max_category_rank)
+    if has_stock is not None:
+        if has_stock:
+            query = query.filter(FilterPool.stock > 0)
+        else:
+            query = query.filter(or_(FilterPool.stock == 0, FilterPool.stock.is_(None)))
+
+    # 上架日期筛选：逻辑与链接初筛保持一致
+    if listed_at_period:
+        now = datetime.utcnow()
+        start_date = None
+        if listed_at_period == "6months":
+            start_date = now - timedelta(days=180)
+        elif listed_at_period == "1year":
+            start_date = now - timedelta(days=365)
+        elif listed_at_period == "1.5years":
+            start_date = now - timedelta(days=547)
+
+        if start_date:
+            # 成功获取且在时间范围内，或已去爬但未获取到（not_found/error），排除 pending
+            query = query.filter(
+                or_(
+                    and_(
+                        FilterPool.listed_at_status == "success",
+                        FilterPool.listed_at >= start_date,
+                    ),
+                    FilterPool.listed_at_status.in_(["not_found", "error"]),
+                )
+            )
+
+    # 品牌剔除：逻辑与链接初筛保持一致，保留 brand 为 NULL 的记录
+    if exclude_brands:
+        query = query.filter(
+            or_(
+                FilterPool.brand.is_(None),
+                ~FilterPool.brand.in_(exclude_brands),
+            )
         )
-        
-        
-        return response
-    except Exception as e:
-        # 调试：记录筛选池列表加载失败的详细原因到 debug.log
-        # #region agent log
-        import json as _json_fp, time as _time_fp
-        try:
-            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json_fp.dumps({
-                    "timestamp": int(_time_fp.time() * 1000),
-                    "location": "filter_pool.py:get_filter_pool:exception",
-                    "message": "筛选池加载产品列表失败",
-                    "data": {
-                        "error": str(e)[:300],
-                        "error_type": type(e).__name__
-                    },
-                    "hypothesisId": "H_filter_pool_load_fail",
-                    "runId": "filter-pool-debug"
-                }, ensure_ascii=False) + "\n")
-        except Exception:
-            # 日志失败不影响主流程
-            pass
-        # #endregion
-        raise
+
+    # 店铺剔除：与品牌剔除逻辑一致，保留 shop_name 为 NULL 的记录
+    if exclude_shops:
+        query = query.filter(
+            or_(
+                FilterPool.shop_name.is_(None),
+                ~FilterPool.shop_name.in_(exclude_shops),
+            )
+        )
+    
+    
+    # Get total count
+    total = query.count()
+    
+    
+    # Get paginated results
+    products = query.order_by(FilterPool.crawled_at.desc()).offset(skip).limit(limit).all()
+    
+    
+    # Convert datetime fields to strings for response
+    converted_products = []
+    for product in products:
+        product_dict = {
+            "id": product.id,
+            "product_url": product.product_url,
+            "product_name": product.product_name,
+            "thumbnail_image": product.thumbnail_image,
+            "brand": product.brand,
+            "shop_name": product.shop_name,
+            "price": product.price,
+            "rating": product.rating,
+            "stock": product.stock,
+            "review_count": product.review_count,
+            "shop_rank": product.shop_rank,
+            "category_rank": product.category_rank,
+            "ad_rank": product.ad_rank,
+            "is_fbe": product.is_fbe,
+            "competitor_count": product.competitor_count,
+            "listed_at": product.listed_at.isoformat() if product.listed_at and isinstance(product.listed_at, datetime) else (str(product.listed_at) if product.listed_at else None),
+            "latest_review_at": product.latest_review_at.isoformat() if product.latest_review_at and isinstance(product.latest_review_at, datetime) else (str(product.latest_review_at) if product.latest_review_at else None),
+            "earliest_review_at": product.earliest_review_at.isoformat() if product.earliest_review_at and isinstance(product.earliest_review_at, datetime) else (str(product.earliest_review_at) if product.earliest_review_at else None),
+            "crawled_at": product.crawled_at.isoformat() if product.crawled_at and isinstance(product.crawled_at, datetime) else (str(product.crawled_at) if product.crawled_at else "")
+        }
+        converted_products.append(FilterPoolResponse(**product_dict))
+    
+    
+    response = FilterPoolListResponse(
+        items=converted_products,
+        total=total,
+        skip=skip,
+        limit=limit
+    )
+    
+    
+    return response
 
 @router.post("/filter", response_model=FilterPoolListResponse)
 async def filter_products(

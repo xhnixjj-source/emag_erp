@@ -1,11 +1,11 @@
 """Profit calculation API"""
+import logging
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 from pydantic import BaseModel
 from datetime import datetime
-import json
 import os
 from app.database import get_db
 from app.middleware.auth_middleware import require_auth
@@ -30,7 +30,7 @@ from app.services.product_info_service import (
 )
 from decimal import Decimal
 
-
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/profit", tags=["profit"])
 
@@ -956,11 +956,7 @@ async def create_profit_calculation(
         )
     except Exception as e:
         # 如果操作日志记录失败，不应该影响主流程
-        import traceback
-        import json
-        log_file = r"d:\emag_erp\.cursor\debug.log"
-        with open(log_file, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"location":"profit.py:543","message":"Error creating operation log","data":{"error_message":str(e),"error_type":type(e).__name__},"timestamp":int(__import__('time').time()*1000),"runId":"initial","hypothesisId":"E"}) + "\n")
+        logger.warning("create_operation_log failed: %s", e, exc_info=True)
     
     # 构造响应对象，确保 calculated_at 是字符串
     return ProfitCalculationResponse(
@@ -992,29 +988,8 @@ async def update_profit_calculation(
     db: Session = Depends(get_db)
 ):
     """Update profit calculation"""
-    import traceback
-    import json
-    log_file = r"d:\emag_erp\.cursor\debug.log"
-    try:
-        # #region agent log
-        with open(log_file, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"location":"profit.py:567","message":"Starting update_profit_calculation","data":{"listing_id":listing_id,"request_data":request.dict()},"timestamp":int(__import__('time').time()*1000),"runId":"initial","hypothesisId":"D"}) + "\n")
-        # #endregion
-        # Check permission
-        require_product_edit_permission(db, listing_id, current_user["id"])
-        
-        result = await create_profit_calculation(listing_id, request, current_user, db)
-        # #region agent log
-        with open(log_file, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"location":"profit.py:572","message":"create_profit_calculation success","data":{"listing_id":listing_id,"calc_id":result.id if result else None},"timestamp":int(__import__('time').time()*1000),"runId":"initial","hypothesisId":"D"}) + "\n")
-        # #endregion
-        return result
-    except Exception as e:
-        # #region agent log
-        with open(log_file, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"location":"profit.py:576","message":"Error in update_profit_calculation","data":{"error_message":str(e),"error_type":type(e).__name__,"traceback":traceback.format_exc()},"timestamp":int(__import__('time').time()*1000),"runId":"initial","hypothesisId":"D"}) + "\n")
-        # #endregion
-        raise
+    require_product_edit_permission(db, listing_id, current_user["id"])
+    return await create_profit_calculation(listing_id, request, current_user, db)
 
 @router.put("/{listing_id}/reject", response_model=dict)
 async def reject_profit_calculation(

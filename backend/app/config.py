@@ -17,15 +17,6 @@ def get_project_root() -> Path:
     project_root = backend.parent           # emag_erp (项目根目录)
     return project_root
 
-# 获取debug.log文件的正确路径
-def get_debug_log_path() -> str:
-    """获取debug.log文件的正确路径"""
-    project_root = get_project_root()
-    debug_log_path = project_root / '.cursor' / 'debug.log'
-    # 确保.cursor目录存在
-    debug_log_path.parent.mkdir(parents=True, exist_ok=True)
-    return str(debug_log_path)
-
 
 class Config:
     """Application configuration"""

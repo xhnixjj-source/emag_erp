@@ -28,17 +28,6 @@ from app.services.retry_manager import RetryManager
 
 logger = logging.getLogger(__name__)
 
-# #region agent log
-_DEBUG_LOG_PATH = r"d:\emag_erp\.cursor\debug.log"
-def _dbg(location, message, data=None, hypothesis=""):
-    try:
-        import json as _j
-        entry = {"timestamp": int(_time.time()*1000), "location": location, "message": message, "data": data or {}, "hypothesisId": hypothesis, "runId": "istoric-debug"}
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as _f:
-            _f.write(_j.dumps(entry, ensure_ascii=False, default=str) + "\n")
-    except Exception:
-        pass
-# #endregion
 
 # ── 罗马尼亚语月份名称映射 ──────────────────────────────────
 # 插件返回的日期格式为 "DD Mon YYYY"，月份使用罗马尼亚语缩写
@@ -184,16 +173,9 @@ def get_listed_at_via_browser(page, product_url: str) -> Optional[datetime]:
 
     api_page = None
     try:
-        # #region agent log
-        t0 = _time.time()
-        _dbg("client.py:browser_start", "浏览器方式API请求开始", {"url": product_url, "endpoint": endpoint}, "H6-browser")
-        # #endregion
 
         # 在同一浏览器上下文中打开新标签页
         context = page.context
-        # #region agent log
-        _dbg("client.py:browser_new_page", "准备创建api_page", {"url": product_url, "context_pages": len(context.pages)}, "H4,H5")
-        # #endregion
         api_page = context.new_page()
         # 为 api_page 设置较短的默认超时（Playwright 级安全网）
         api_page.set_default_timeout(config.ISTORIC_PRETURI_TIMEOUT * 1000 + 5000)
@@ -203,13 +185,7 @@ def get_listed_at_via_browser(page, product_url: str) -> Optional[datetime]:
         try:
             api_page.goto(f"{endpoint}/", wait_until="commit", timeout=10000)
             goto_ok = True
-            # #region agent log
-            _dbg("client.py:browser_goto_ok", "api_page导航成功", {"url": product_url}, "H5")
-            # #endregion
         except Exception as _goto_err:
-            # #region agent log
-            _dbg("client.py:browser_goto_err", "api_page导航失败-跳过evaluate", {"url": product_url, "error": str(_goto_err)[:200]}, "H5")
-            # #endregion
             logger.info(
                 f"[IstoricPreturi] 浏览器导航到API域失败，跳过fetch url={product_url}, "
                 f"错误: {str(_goto_err)[:200]}"
@@ -217,9 +193,6 @@ def get_listed_at_via_browser(page, product_url: str) -> Optional[datetime]:
 
         # goto 失败时页面处于 about:blank，evaluate() 会永久挂起，必须跳过
         if not goto_ok:
-            # #region agent log
-            _dbg("client.py:browser_skip_evaluate", "goto失败,跳过evaluate直接返回None", {"url": product_url}, "F1")
-            # #endregion
             return None
 
         # 在浏览器中执行 fetch 请求（same-origin，无 CORS 问题）
@@ -265,16 +238,6 @@ def get_listed_at_via_browser(page, product_url: str) -> Optional[datetime]:
             "timeoutMs": fetch_timeout_ms,
         })
 
-        # #region agent log
-        elapsed = _time.time() - t0
-        _dbg("client.py:browser_response", "浏览器方式API响应", {
-            "url": product_url, "elapsed_s": round(elapsed, 2),
-            "has_error": bool(js_result and js_result.get("error")),
-            "error": js_result.get("error") if js_result else None,
-            "html_len": len(js_result.get("html", "")) if js_result and js_result.get("html") else 0,
-            "status": js_result.get("status") if js_result else None,
-        }, "H6-browser")
-        # #endregion
 
         if not js_result or js_result.get("error"):
             logger.info(
@@ -293,17 +256,11 @@ def get_listed_at_via_browser(page, product_url: str) -> Optional[datetime]:
 
         listed_at = _extract_listed_at_from_html(html_content)
         if listed_at:
-            # #region agent log
-            _dbg("client.py:browser_success", "浏览器方式成功获取上架日期", {"url": product_url, "listed_at": listed_at.isoformat()}, "H6-browser")
-            # #endregion
             logger.info(
                 f"[IstoricPreturi] 浏览器方式获取上架日期成功 url={product_url}, "
                 f"listed_at={listed_at.isoformat()}"
             )
         else:
-            # #region agent log
-            _dbg("client.py:browser_parse_fail", "浏览器方式HTML解析失败", {"url": product_url, "html_len": len(html_content), "html_snippet": html_content[:300]}, "H6-browser")
-            # #endregion
             logger.info(
                 f"[IstoricPreturi] 浏览器方式未解析出上架日期 url={product_url}, "
                 f"html_length={len(html_content)}"
@@ -311,10 +268,6 @@ def get_listed_at_via_browser(page, product_url: str) -> Optional[datetime]:
         return listed_at
 
     except Exception as e:
-        # #region agent log
-        elapsed = _time.time() - t0 if 't0' in dir() else -1
-        _dbg("client.py:browser_exception", "浏览器方式获取异常", {"url": product_url, "error": str(e), "error_type": type(e).__name__, "elapsed_s": round(elapsed, 2)}, "H6-browser")
-        # #endregion
         logger.warning(
             f"[IstoricPreturi] 浏览器方式获取上架日期异常 url={product_url}, 错误: {e}"
         )
@@ -323,13 +276,7 @@ def get_listed_at_via_browser(page, product_url: str) -> Optional[datetime]:
         if api_page:
             try:
                 api_page.close()
-                # #region agent log
-                _dbg("client.py:browser_page_closed", "api_page已关闭", {"url": product_url, "remaining_pages": len(page.context.pages)}, "H4")
-                # #endregion
             except Exception as _close_err:
-                # #region agent log
-                _dbg("client.py:browser_page_close_err", "api_page关闭失败", {"url": product_url, "error": str(_close_err)[:200]}, "H4")
-                # #endregion
                 pass
 
 
@@ -381,63 +328,12 @@ def get_listed_at(product_url: str) -> Optional[datetime]:
 
         api_url = f"{endpoint}/getProductInfo"
 
-        # #region agent log
-        t0 = _time.time()
-        # 检查是否使用代理
-        try:
-            from app.utils.proxy import proxy_manager
-            from app.config import config as app_config
-            proxy_used = None
-            proxy_enabled = False
-            proxy_count = 0
-            config_proxy_enabled = False
-            
-            if proxy_manager:
-                proxy_enabled = proxy_manager.enabled
-                proxy_count = len(proxy_manager.proxies) if hasattr(proxy_manager, 'proxies') else 0
-                if proxy_manager.enabled:
-                    proxy_used = proxy_manager.get_proxy()
-            
-            config_proxy_enabled = app_config.PROXY_ENABLED
-            
-            _dbg("client.py:proxy_check", "代理检查", {
-                "config_proxy_enabled": config_proxy_enabled,
-                "proxy_manager_exists": proxy_manager is not None,
-                "proxy_manager_enabled": proxy_enabled,
-                "proxy_count": proxy_count,
-                "proxy_used": bool(proxy_used),
-                "proxy_api_url": app_config.PROXY_API_URL if hasattr(app_config, 'PROXY_API_URL') else None
-            }, "H2,H3")
-        except Exception as proxy_check_err:
-            proxy_manager = None
-            proxy_used = None
-            proxy_enabled = False
-            _dbg("client.py:proxy_check_error", "代理检查异常", {
-                "error": str(proxy_check_err)[:200],
-                "error_type": type(proxy_check_err).__name__
-            }, "H2,H3")
-        
-        _dbg("client.py:request_start", "API请求开始", {
-            "url": product_url, 
-            "api_url": api_url, 
-            "client_id": _get_client_identifier()[:8],
-            "proxy_enabled": proxy_enabled,
-            "proxy_used": bool(proxy_used),
-            "user_agent": headers.get("User-Agent", "")[:50]
-        }, "H2,H3")
-        # #endregion
 
         try:
             # 如果启用了代理，使用代理发送请求
             proxies = None
             if proxy_used:
                 proxies = proxy_used
-                # #region agent log
-                _dbg("client.py:using_proxy", "使用代理发送请求", {
-                    "url": product_url,
-                    "proxy": str(proxy_used)[:100] if proxy_used else None
-                }, "H2")
-                # #endregion
             
             resp = requests.post(
                 api_url,
@@ -446,16 +342,8 @@ def get_listed_at(product_url: str) -> Optional[datetime]:
                 timeout=config.ISTORIC_PRETURI_TIMEOUT,
                 proxies=proxies,
             )
-            # #region agent log
-            elapsed = _time.time() - t0
-            _dbg("client.py:response", "API响应", {"url": product_url, "status": resp.status_code, "length": len(resp.text), "elapsed_s": round(elapsed, 2), "first_200": resp.text[:200]}, "H1,H3,H5")
-            # #endregion
             resp.raise_for_status()
         except Exception as e:
-            # #region agent log
-            elapsed = _time.time() - t0
-            _dbg("client.py:request_error", "API请求异常", {"url": product_url, "error": str(e), "error_type": type(e).__name__, "elapsed_s": round(elapsed, 2)}, "H1,H2")
-            # #endregion
             logger.warning(
                 f"[IstoricPreturi] 请求失败 url={product_url}, api={api_url}, 错误: {e}"
             )
@@ -463,46 +351,26 @@ def get_listed_at(product_url: str) -> Optional[datetime]:
 
         html_content = resp.text
         if not html_content or len(html_content) < 100:
-            # #region agent log
-            _dbg("client.py:short_response", "响应内容过短", {"url": product_url, "length": len(html_content) if html_content else 0}, "H3,H5")
-            # #endregion
             logger.info(
                 f"[IstoricPreturi] 响应内容过短 url={product_url}, length={len(html_content) if html_content else 0}"
             )
             return None
 
-        # #region agent log
-        has_onlySite = "__chart_options_onlySite" in html_content
-        has_allSites = "__chart_options_allSites" in html_content
-        _dbg("client.py:html_check", "HTML图表检查", {"url": product_url, "html_len": len(html_content), "has_onlySite": has_onlySite, "has_allSites": has_allSites}, "H3,H5")
-        # #endregion
 
         listed_at = _extract_listed_at_from_html(html_content)
         if not listed_at:
-            # #region agent log
-            _dbg("client.py:parse_fail", "HTML解析失败-无上架日期", {"url": product_url, "html_len": len(html_content), "has_onlySite": has_onlySite, "has_allSites": has_allSites, "html_snippet": html_content[:500]}, "H3,H5")
-            # #endregion
             logger.info(
                 f"[IstoricPreturi] 未能从 HTML 中解析出上架日期 url={product_url}, "
                 f"html_length={len(html_content)}"
             )
             return None
 
-        # #region agent log
-        _dbg("client.py:success", "成功获取上架日期", {"url": product_url, "listed_at": listed_at.isoformat()}, "H1")
-        # #endregion
         return listed_at
 
     try:
         result = retry_manager.execute_with_retry(_request_once, task_id=None)
-        # #region agent log
-        _dbg("client.py:get_listed_at_return", "get_listed_at返回", {"url": product_url, "result": result.isoformat() if result else None}, "H4")
-        # #endregion
         return result
     except Exception as e:
-        # #region agent log
-        _dbg("client.py:get_listed_at_exception", "get_listed_at异常(重试耗尽)", {"url": product_url, "error": str(e), "error_type": type(e).__name__}, "H2,H4")
-        # #endregion
         logger.warning(
             f"[IstoricPreturi] 多次重试仍然失败，放弃获取上架日期 url={product_url}, 错误: {e}"
         )

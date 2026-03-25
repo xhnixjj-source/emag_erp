@@ -218,13 +218,6 @@ class BitBrowserManager:
 
         with self._window_available:
             while True:
-                # #region agent log
-                import json as _json, time as _time
-                _in_use_count = sum(1 for i in self._windows.values() if i.in_use)
-                _free_count = len(self._windows) - _in_use_count
-                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                    _f.write(_json.dumps({"timestamp": int(_time.time()*1000), "location": "bitbrowser_manager.py:acquire_exclusive_window", "message": "Window pool state on acquire", "data": {"total": len(self._windows), "in_use": _in_use_count, "free": _free_count}, "hypothesisId": "H1", "runId": "post-fix"}) + "\n")
-                # #endregion
 
                 # 尝试找一个空闲窗口
                 for wid, info in self._windows.items():
@@ -299,15 +292,6 @@ class BitBrowserManager:
             if not info:
                 logger.warning("[BitBrowser] 释放窗口失败，未知窗口ID: %s", window_id)
                 return
-            # #region agent log
-            import json as _json, time as _time
-            _was_in_use = info.in_use
-            try:
-                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                    _f.write(_json.dumps({"timestamp": int(_time.time()*1000), "location": "bitbrowser_manager.py:release_window", "message": "Releasing window", "data": {"window_id": window_id, "was_in_use": _was_in_use, "task_count": info.task_count}, "hypothesisId": "H2", "runId": "post-fix"}) + "\n")
-            except Exception:
-                pass
-            # #endregion
             if not info.in_use:
                 return
 
@@ -325,24 +309,6 @@ class BitBrowserManager:
                     "[BitBrowser] 窗口达到任务上限(%d/%d)，主动重启以清空浏览器状态 - id=%s",
                     info.task_count, max_tasks, window_id,
                 )
-                # #region agent log
-                try:
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json.dumps({
-                            "timestamp": int(_time.time() * 1000),
-                            "location": "bitbrowser_manager.py:release_window:proactive_restart",
-                            "message": "窗口达到任务上限，主动重启",
-                            "data": {
-                                "window_id": window_id,
-                                "task_count": info.task_count,
-                                "max_tasks": max_tasks,
-                            },
-                            "hypothesisId": "H_proactive_restart",
-                            "runId": "window-rotate",
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
             else:
                 # 不需要重启：释放窗口，并设置冷却期以降低同一代理IP的请求频率
                 info.in_use = False
@@ -494,14 +460,6 @@ class BitBrowserManager:
             if self._is_ws_alive(info.ws_url):
                 return info.ws_url
             else:
-                # #region agent log
-                import json as _json_ws, time as _time_ws
-                try:
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json_ws.dumps({"timestamp": int(_time_ws.time()*1000), "location": "bitbrowser_manager.py:_ensure_window_open:stale_ws", "message": "ws_url不可达，清除缓存并重新打开", "data": {"window_id": info.window_id, "stale_ws_url": info.ws_url}, "hypothesisId": "H3_stale_ws", "runId": "p1p2-fix"}, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
                 logger.warning(
                     "[BitBrowser] ws_url 不可达，重新打开窗口 - id=%s, stale_ws=%s",
                     info.window_id, info.ws_url,
@@ -512,14 +470,6 @@ class BitBrowserManager:
         try:
             ws = self._open_window_api(info.window_id)
             info.ws_url = ws
-            # #region agent log
-            import json as _json_ws2, time as _time_ws2
-            try:
-                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                    _f.write(_json_ws2.dumps({"timestamp": int(_time_ws2.time()*1000), "location": "bitbrowser_manager.py:_ensure_window_open:reopened", "message": "窗口重新打开成功", "data": {"window_id": info.window_id, "new_ws_url": ws}, "hypothesisId": "H4_ws_reopen", "runId": "p1p2-fix"}, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-            # #endregion
             return ws
         except Exception as e:
             logger.error("[BitBrowser] 打开窗口失败 - id=%s, error=%s", info.window_id, e)

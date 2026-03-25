@@ -257,26 +257,6 @@ async def get_brands(
     # Extract brand strings from tuples
     brand_list = [brand[0] for brand in brands if brand[0]]
     
-    # #region agent log
-    try:
-        import json as _json_debug, time as _time_debug
-        _entry = {
-            "id": f"brands_{int(_time_debug.time() * 1000)}",
-            "timestamp": int(_time_debug.time() * 1000),
-            "location": "keywords.py:get_brands",
-            "message": "brands query result",
-            "data": {
-                "count": len(brand_list),
-                "sample": brand_list[:5]
-            },
-            "runId": "pre-fix-1",
-            "hypothesisId": "H1,H2"
-        }
-        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-            _f.write(_json_debug.dumps(_entry, ensure_ascii=False, default=str) + "\n")
-    except Exception:
-        pass
-    # #endregion
     
     return {"brands": brand_list}
 
@@ -305,47 +285,6 @@ async def get_keyword_links(
     exclude_brands_brackets: Optional[List[str]] = Query(None, alias="exclude_brands[]")
 ):
     """Get keyword links with optional filters"""
-    # #region agent log
-    import time as _time_query
-    import json as _json_query
-    import traceback as _traceback
-    _query_start_time = _time_query.time()
-    _query_debug_log_path = r"d:\emag_erp\.cursor\debug.log"
-    def _dbg_query(location, message, data=None, hypothesis=""):
-        try:
-            entry = {
-                "timestamp": int(_time_query.time() * 1000),
-                "location": location,
-                "message": message,
-                "data": data or {},
-                "hypothesisId": hypothesis,
-                "runId": "debug-500-error"
-            }
-            with open(_query_debug_log_path, "a", encoding="utf-8") as _f:
-                _f.write(_json_query.dumps(entry, ensure_ascii=False, default=str) + "\n")
-        except Exception:
-            pass
-    try:
-        _dbg_query("keywords.py:query_start", "查询请求开始", {
-            "user_id": current_user["id"],
-            "db_session_id": id(db),
-            "skip": skip,
-            "limit": limit,
-            "keyword_id": keyword_id,
-            "filters": {
-                "price_min": price_min, "price_max": price_max,
-                "review_count_min": review_count_min, "review_count_max": review_count_max,
-                "rating_min": rating_min, "rating_max": rating_max,
-                "source": source, "tag": tag,
-                "offer_count_min": offer_count_min, "offer_count_max": offer_count_max,
-                "listed_at_period": listed_at_period,
-                "exclude_brands": exclude_brands,
-                "exclude_brands_brackets": exclude_brands_brackets,
-            }
-        }, "H1,H2,H3,H4,H5")
-    except Exception as _log_err:
-        pass
-    # #endregion
     
     try:
         query = db.query(KeywordLink)
@@ -433,96 +372,23 @@ async def get_keyword_links(
                 )
             )
         
-        # #region agent log
-        _time_before_count = _time_query.time()
-        _dbg_query("keywords.py:before_count", "准备执行count查询", {
-            "elapsed_since_start": round(_time_before_count - _query_start_time, 3)
-        }, "H2,H4")
-        # #endregion
         
         # 获取总数
         total = query.count()
         
-        # #region agent log
-        _time_after_count = _time_query.time()
-        _dbg_query("keywords.py:after_count", "count查询完成", {
-            "total": total,
-            "count_query_duration_s": round(_time_after_count - _time_before_count, 3),
-            "elapsed_since_start": round(_time_after_count - _query_start_time, 3)
-        }, "H2,H4")
-        # #endregion
         
-        # #region agent log
-        _time_before_fetch = _time_query.time()
-        _dbg_query("keywords.py:before_fetch", "准备获取分页数据", {
-            "elapsed_since_start": round(_time_before_fetch - _query_start_time, 3)
-        }, "H2,H4")
-        # #endregion
         
         # 获取分页数据
         links = query.order_by(KeywordLink.crawled_at.desc()).offset(skip).limit(limit).all()
         
-        # #region agent log
-        _time_after_fetch = _time_query.time()
-        try:
-            _sample_link = links[0] if links else None
-            _sample_dict = {}
-            if _sample_link:
-                try:
-                    _sample_dict = {
-                        "id": _sample_link.id,
-                        "has_keyword_relation": hasattr(_sample_link, 'keyword'),
-                        "keyword_relation_type": str(type(_sample_link.keyword)) if hasattr(_sample_link, 'keyword') else None,
-                        "listed_at_type": str(type(_sample_link.listed_at)) if _sample_link.listed_at else None,
-                        "crawled_at_type": str(type(_sample_link.crawled_at)) if _sample_link.crawled_at else None
-                    }
-                except Exception as _sample_err:
-                    _sample_dict = {"error": str(_sample_err)}
-            _dbg_query("keywords.py:after_fetch", "分页数据获取完成", {
-                "items_count": len(links),
-                "fetch_duration_s": round(_time_after_fetch - _time_before_fetch, 3),
-                "total_duration_s": round(_time_after_fetch - _query_start_time, 3),
-                "sample_link_info": _sample_dict
-            }, "H1,H2,H4")
-        except Exception as _log_err:
-            pass
-        # #endregion
         
-        # #region agent log
-        _time_before_serialize = _time_query.time()
-        try:
-            _dbg_query("keywords.py:before_serialize", "准备序列化返回数据", {
-                "links_count": len(links),
-                "links_type": str(type(links))
-            }, "H1,H2,H4")
-        except Exception:
-            pass
-        # #endregion
         
         # 手动序列化 SQLAlchemy 对象，避免关系对象序列化问题
         try:
-            # #region agent log
-            try:
-                _dbg_query("keywords.py:serialize_start", "开始序列化", {
-                    "links_count": len(links)
-                }, "H1,H2,H4")
-            except Exception:
-                pass
-            # #endregion
             
             serialized_links = []
             for idx, link in enumerate(links):
                 try:
-                    # #region agent log
-                    if idx == 0 or idx % 20 == 0:
-                        try:
-                            _dbg_query("keywords.py:serialize_link", "序列化链接", {
-                                "link_index": idx,
-                                "link_id": getattr(link, 'id', None)
-                            }, "H1,H2,H4")
-                        except Exception:
-                            pass
-                    # #endregion
                     
                     # 直接手动构建字典，避免关系对象序列化问题
                     # 安全处理日期时间字段
@@ -569,30 +435,9 @@ async def get_keyword_links(
                     }
                     serialized_links.append(link_dict)
                 except Exception as link_err:
-                    # #region agent log
-                    try:
-                        _dbg_query("keywords.py:serialize_link_error", "序列化单个链接失败", {
-                            "link_id": getattr(link, 'id', None),
-                            "error": str(link_err),
-                            "error_type": type(link_err).__name__,
-                            "traceback": _traceback.format_exc()
-                        }, "H1,H2,H4")
-                    except Exception:
-                        pass
-                    # #endregion
                     logger.error(f"序列化链接 {getattr(link, 'id', 'unknown')} 失败: {link_err}", exc_info=True)
                     raise
             
-            # #region agent log
-            _time_after_serialize = _time_query.time()
-            try:
-                _dbg_query("keywords.py:after_serialize", "序列化完成", {
-                    "serialized_count": len(serialized_links),
-                    "serialize_duration_s": round(_time_after_serialize - _time_before_serialize, 3)
-                }, "H1,H2,H4")
-            except Exception:
-                pass
-            # #endregion
             
             return {
                 "items": serialized_links,
@@ -601,29 +446,9 @@ async def get_keyword_links(
                 "limit": limit
             }
         except Exception as serialize_err:
-            # #region agent log
-            try:
-                _dbg_query("keywords.py:serialize_error", "序列化过程发生异常", {
-                    "error": str(serialize_err),
-                    "error_type": type(serialize_err).__name__,
-                    "traceback": _traceback.format_exc()
-                }, "H1,H2,H4,H5")
-            except Exception:
-                pass
-            # #endregion
             logger.error(f"序列化链接数据失败: {serialize_err}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"序列化数据失败: {str(serialize_err)}")
     except Exception as query_err:
-        # #region agent log
-        try:
-            _dbg_query("keywords.py:query_execution_error", "查询执行过程发生异常", {
-                "error": str(query_err),
-                "error_type": type(query_err).__name__,
-                "traceback": _traceback.format_exc()
-            }, "H3,H5")
-        except Exception:
-            pass
-        # #endregion
         logger.error(f"查询链接数据失败: {query_err}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"查询数据失败: {str(query_err)}")
 
@@ -1032,25 +857,6 @@ def _process_batch_get_listed_at(link_ids: List[int], user_id: int):
             logger.warning(f"[批量获取上架日期] 没有找到链接 - 用户ID: {user_id}, 链接ID: {link_ids}")
             return
         
-        # #region agent log
-        import json as _json_debug
-        import time as _time_debug
-        _debug_log_path = r"d:\emag_erp\.cursor\debug.log"
-        def _dbg(location, message, data=None, hypothesis=""):
-            try:
-                entry = {
-                    "timestamp": int(_time_debug.time() * 1000),
-                    "location": location,
-                    "message": message,
-                    "data": data or {},
-                    "hypothesisId": hypothesis,
-                    "runId": "batch-listed-at-debug"
-                }
-                with open(_debug_log_path, "a", encoding="utf-8") as _f:
-                    _f.write(_json_debug.dumps(entry, ensure_ascii=False, default=str) + "\n")
-            except Exception:
-                pass
-        # #endregion
         
         success_count = 0
         error_count = 0
@@ -1086,51 +892,16 @@ def _process_batch_get_listed_at(link_ids: List[int], user_id: int):
             page = context.new_page()
             logger.info(f"[批量获取上架日期] 浏览器页面创建成功")
             
-            # #region agent log
-            _dbg("keywords.py:batch_start", "批量处理开始", {
-                "total_links": len(links),
-                "commit_interval": commit_interval,
-                "db_session_id": id(db),
-                "browser_context_acquired": context is not None,
-                "page_created": page is not None
-            }, "H1,H3")
-            # #endregion
             
             for idx, link in enumerate(links):
-                # #region agent log
-                _dbg("keywords.py:loop_iteration_start", "循环迭代开始", {
-                    "index": idx + 1,
-                    "total": len(links),
-                    "url": link.product_url
-                }, "H1,H5")
-                # #endregion
                 
                 try:
-                    # #region agent log
-                    _dbg("keywords.py:batch_start_item", "开始处理链接", {
-                        "index": idx + 1,
-                        "total": len(links),
-                        "url": link.product_url,
-                        "consecutive_errors": consecutive_errors,
-                        "time_since_last": request_times[-1] - request_times[-2] if len(request_times) >= 2 else None
-                    }, "H1,H5")
-                    # #endregion
                     
                     # 如果已经有成功的上架日期，跳过
                     if link.listed_at_status == 'success' and link.listed_at:
                         skipped_count += 1
                         continue
                     
-                    # #region agent log
-                    current_time = _time_debug.time()
-                    request_times.append(current_time)
-                    if len(request_times) > 1:
-                        delay_since_last = current_time - request_times[-2]
-                        _dbg("keywords.py:request_timing", "请求时间间隔", {
-                            "delay_since_last_s": round(delay_since_last, 2),
-                            "request_index": idx + 1
-                        }, "H1")
-                    # #endregion
                     
                     # 使用浏览器方式获取上架日期（模拟人工点击）
                     try:
@@ -1151,14 +922,6 @@ def _process_batch_get_listed_at(link_ids: List[int], user_id: int):
                         link.listed_at_status = 'error'
                         link.listed_at_error_type = error_type
                         logger.warning(f"[批量获取上架日期] API调用异常 - URL: {link.product_url}, 错误: {api_err}")
-                        # #region agent log
-                        _dbg("keywords.py:api_exception", "API调用异常", {
-                            "url": link.product_url,
-                            "error": str(api_err)[:200],
-                            "error_type": error_type,
-                            "consecutive_errors": consecutive_errors
-                        }, "H1,H4,H5")
-                        # #endregion
                         listed_at = None
                     
                     if listed_at:
@@ -1168,25 +931,12 @@ def _process_batch_get_listed_at(link_ids: List[int], user_id: int):
                         success_count += 1
                         consecutive_errors = 0
                         logger.info(f"[批量获取上架日期] 成功 - URL: {link.product_url}, 上架日期: {listed_at.isoformat()}")
-                        # #region agent log
-                        _dbg("keywords.py:success", "获取上架日期成功", {
-                            "url": link.product_url,
-                            "listed_at": listed_at.isoformat(),
-                            "consecutive_errors_reset": True
-                        }, "H5")
-                        # #endregion
                     else:
                         link.listed_at_status = 'not_found'
                         link.listed_at_error_type = None
                         error_count += 1
                         consecutive_errors += 1
                         logger.info(f"[批量获取上架日期] 未找到 - URL: {link.product_url}")
-                        # #region agent log
-                        _dbg("keywords.py:not_found", "未找到上架日期", {
-                            "url": link.product_url,
-                            "consecutive_errors": consecutive_errors
-                        }, "H5")
-                        # #endregion
                     
                     # 动态延迟
                     base_delay = 0.5
@@ -1196,49 +946,15 @@ def _process_batch_get_listed_at(link_ids: List[int], user_id: int):
                     else:
                         delay = base_delay
                     
-                    # #region agent log
-                    _dbg("keywords.py:delay_before_next", "延迟设置", {
-                        "delay_s": round(delay, 2),
-                        "consecutive_errors": consecutive_errors,
-                        "base_delay": base_delay
-                    }, "H1,H5")
-                    # #endregion
                     
                     time.sleep(delay)
                     
-                    # #region agent log
-                    _dbg("keywords.py:after_sleep", "延迟完成，准备检查提交", {
-                        "index": idx + 1,
-                        "total": len(links),
-                        "should_commit": (idx + 1) % commit_interval == 0 or (idx + 1) == len(links),
-                        "commit_interval": commit_interval
-                    }, "H1,H3")
-                    # #endregion
                     
                     # 定期提交
                     if (idx + 1) % commit_interval == 0 or (idx + 1) == len(links):
-                        # #region agent log
-                        _dbg("keywords.py:periodic_commit", "定期提交数据库", {
-                            "processed_count": idx + 1,
-                            "total": len(links),
-                            "success_count": success_count,
-                            "error_count": error_count
-                        }, "H1,H3")
-                        # #endregion
                         try:
                             db.commit()
-                            # #region agent log
-                            _dbg("keywords.py:commit_success", "数据库提交成功", {
-                                "processed_count": idx + 1
-                            }, "H1,H3")
-                            # #endregion
                         except Exception as commit_err:
-                            # #region agent log
-                            _dbg("keywords.py:commit_error", "数据库提交失败", {
-                                "error": str(commit_err)[:200],
-                                "processed_count": idx + 1
-                            }, "H1,H3")
-                            # #endregion
                             db.rollback()
                             raise
                 
@@ -1258,82 +974,25 @@ def _process_batch_get_listed_at(link_ids: List[int], user_id: int):
                     link.listed_at_error_type = error_type
                     logger.warning(f"[批量获取上架日期] 失败 - URL: {link.product_url}, 错误: {e}")
                     
-                    # #region agent log
-                    _dbg("keywords.py:exception_caught", "捕获到异常", {
-                        "index": idx + 1,
-                        "url": link.product_url,
-                        "error": str(e)[:200],
-                        "error_type": type(e).__name__
-                    }, "H1,H4,H5")
-                    # #endregion
                     
                     if consecutive_errors >= 3:
                         extra_delay = min(consecutive_errors * 2, 10)
-                        # #region agent log
-                        _dbg("keywords.py:backoff_delay", "连续错误过多，增加延迟", {
-                            "consecutive_errors": consecutive_errors,
-                            "extra_delay_s": extra_delay
-                        }, "H5")
-                        # #endregion
                         time.sleep(extra_delay)
                     else:
                         time.sleep(0.5)
                     
                     # 定期提交（异常情况下）
                     if (idx + 1) % commit_interval == 0 or (idx + 1) == len(links):
-                        # #region agent log
-                        _dbg("keywords.py:periodic_commit_exception", "异常后定期提交数据库", {
-                            "processed_count": idx + 1,
-                            "total": len(links),
-                            "success_count": success_count,
-                            "error_count": error_count
-                        }, "H1,H3")
-                        # #endregion
                         try:
                             db.commit()
-                            # #region agent log
-                            _dbg("keywords.py:commit_success_exception", "异常后数据库提交成功", {
-                                "processed_count": idx + 1
-                            }, "H1,H3")
-                            # #endregion
                         except Exception as commit_err:
-                            # #region agent log
-                            _dbg("keywords.py:commit_error_exception", "异常后数据库提交失败", {
-                                "error": str(commit_err)[:200],
-                                "processed_count": idx + 1
-                            }, "H1,H3")
-                            # #endregion
                             db.rollback()
                             logger.error(f"[批量获取上架日期] 提交失败，继续处理: {commit_err}")
                 
-                # #region agent log
-                _dbg("keywords.py:loop_iteration_end", "循环迭代结束", {
-                    "index": idx + 1,
-                    "total": len(links),
-                    "url": link.product_url,
-                    "success_count": success_count,
-                    "error_count": error_count,
-                    "skipped_count": skipped_count
-                }, "H1,H5")
-                # #endregion
             
-            # #region agent log
-            _dbg("keywords.py:loop_completed", "循环处理完成", {
-                "total_processed": len(links),
-                "success_count": success_count,
-                "error_count": error_count,
-                "skipped_count": skipped_count
-            }, "H1,H3")
-            # #endregion
             
         except Exception as ctx_err:
             logger.error(f"[批量获取上架日期] 获取浏览器上下文失败: {ctx_err}", exc_info=True)
-            # #region agent log
-            _dbg("keywords.py:browser_context_error", "浏览器上下文获取失败", {
-                "error": str(ctx_err)[:200],
-                "error_type": type(ctx_err).__name__
-            }, "H1,H3")
-            # #endregion
             return
         finally:
             # 清理浏览器资源
@@ -1350,17 +1009,7 @@ def _process_batch_get_listed_at(link_ids: List[int], user_id: int):
         # 最终提交
         try:
             db.commit()
-            # #region agent log
-            _dbg("keywords.py:final_commit", "最终提交数据库", {
-                "total_processed": len(links)
-            }, "H1,H3")
-            # #endregion
         except Exception as commit_err:
-            # #region agent log
-            _dbg("keywords.py:final_commit_error", "最终提交失败", {
-                "error": str(commit_err)[:200]
-            }, "H1,H3")
-            # #endregion
             db.rollback()
             raise
         

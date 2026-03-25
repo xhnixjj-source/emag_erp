@@ -44,25 +44,6 @@ class BaseInfoExtractor:
         
         try:
             # 等待页面加载：超时或验证码时抛出异常，不继续执行
-            # #region agent log
-            import json as _json_base_wait, time as _time_base_wait
-            _wait_start = _time_base_wait.time()
-            try:
-                with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                    _f.write(_json_base_wait.dumps({
-                        "timestamp": int(_time_base_wait.time() * 1000),
-                        "location": "base_info_extractor.py:before_wait_domcontentloaded",
-                        "message": "准备等待domcontentloaded+元素",
-                        "data": {
-                            "url": product_url,
-                            "timeout_ms": 30000
-                        },
-                        "hypothesisId": "H2",
-                        "runId": "timeout-debug"
-                    }, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-            # #endregion
             
             try:
                 # 使用 domcontentloaded + 关键元素等待替代 networkidle，避免长轮询/广告脚本导致超时
@@ -73,45 +54,8 @@ class BaseInfoExtractor:
                 except Exception:
                     pass  # 元素等待失败不中断，DOM已加载即可
                 
-                # #region agent log
-                try:
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json_base_wait.dumps({
-                            "timestamp": int(_time_base_wait.time() * 1000),
-                            "location": "base_info_extractor.py:after_wait_domcontentloaded",
-                            "message": "domcontentloaded+元素等待完成",
-                            "data": {
-                                "url": product_url,
-                                "elapsed_ms": int((_time_base_wait.time() - _wait_start) * 1000)
-                            },
-                            "hypothesisId": "H2",
-                            "runId": "networkidle-opt"
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
             except PlaywrightTimeoutError as e:
                 # 超时：抛出异常，不继续执行
-                # #region agent log
-                try:
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_json_base_wait.dumps({
-                            "timestamp": int(_time_base_wait.time() * 1000),
-                            "location": "base_info_extractor.py:wait_domcontentloaded_timeout",
-                            "message": "domcontentloaded等待超时",
-                            "data": {
-                                "url": product_url,
-                                "error_type": type(e).__name__,
-                                "error_message": str(e)[:300],
-                                "elapsed_ms": int((_time_base_wait.time() - _wait_start) * 1000),
-                                "timeout_ms": 30000
-                            },
-                            "hypothesisId": "H2",
-                            "runId": "networkidle-opt"
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
                 logger.error(f"BaseInfoExtractor wait_for_load_state('domcontentloaded') 超时: {e}")
                 raise
             

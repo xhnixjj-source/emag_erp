@@ -120,27 +120,13 @@ async def import_opportunities_by_category(
     - 全局按 product_url 去重，已存在则跳过
     """
 
-    def _dbg(loc: str, msg: str, data: dict, hyp: str):
-        try:
-            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as f:
-                f.write(json.dumps({
-                    "runId": "pre-fix",
-                    "hypothesisId": hyp,
-                    "location": loc,
-                    "message": msg,
-                    "data": data,
-                    "timestamp": int(time.time() * 1000),
-                }, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
-
     def _run():
         db = SessionLocal()
         old_shop_id = emag_marketplace_login_service.get_current_shop_id()
         pw = browser = context = page_obj = None
         try:
-            if shop_id is not None:
-                emag_marketplace_login_service.set_current_shop_id(shop_id)
+            emag_marketplace_login_service.set_current_shop_id(shop_id)
+            web_base = emag_marketplace_login_service.get_marketplace_web_base()
 
             cat_id = int(payload.category_doc_id)
             cat_name = (payload.category_name or "").strip()
@@ -149,15 +135,6 @@ async def import_opportunities_by_category(
                 cat_name = f"Category {cat_id}"
 
             keyword_str = f"CAT:{cat_id} {cat_name}"
-            _dbg("emag_marketplace.py:_run:entry", "start import opportunities", {
-                "shop_id": shop_id,
-                "old_shop_id": old_shop_id,
-                "category_doc_id": cat_id,
-                "category_name_len": len(cat_name),
-                "keyword_str_len": len(keyword_str),
-                "per_page": payload.per_page,
-                "max_pages": payload.max_pages,
-            }, "H_backend_thread_start")
 
             # Find or create keyword
             keyword = db.query(Keyword).filter(Keyword.keyword == keyword_str).first()
@@ -171,10 +148,6 @@ async def import_opportunities_by_category(
                 db.add(keyword)
                 db.flush()
                 created_keyword = True
-            _dbg("emag_marketplace.py:_run:keyword", "keyword ready", {
-                "keyword_id": getattr(keyword, "id", None),
-                "created_keyword": created_keyword,
-            }, "H_keyword_create")
 
             created_count = 0
             skipped_count = 0
@@ -183,9 +156,6 @@ async def import_opportunities_by_category(
             max_pages = min(int(payload.max_pages), 30)
 
             # Create ONE authed playwright page for both opportunities + images calls
-            _dbg("emag_marketplace.py:_run:fetch:before", "create authed page", {
-                "category_doc_id": cat_id,
-            }, "H_fetch_begin")
             pw, browser, context, page_obj = emag_marketplace_login_service._create_authed_page()
 
             for page in range(1, max_pages + 1):
@@ -200,7 +170,7 @@ async def import_opportunities_by_category(
                 opp_res = page_obj.evaluate(f"""
                     async () => {{
                         try {{
-                            const res = await fetch('https://marketplace.emag.ro/api-ui/opportunities/', {{
+                            const res = await fetch('{web_base}/api-ui/opportunities/', {{
                                 method: 'POST',
                                 headers: {{
                                     'content-type': 'application/json',
@@ -222,10 +192,8 @@ async def import_opportunities_by_category(
                     raise RuntimeError(f"Unexpected opportunities response: {type(opp_res).__name__}")
 
                 data = opp_res.get("data") or {}
-                meta = data.get("meta") or {}
                 products = data.get("products") or []
                 if not isinstance(products, list) or not products:
-                    _dbg("emag_marketplace.py:_run:opp_empty", "no products in page", {"page": page, "meta": meta}, "H_commit_page")
                     break
 
                 # ---- prepare batch + dedupe ----
@@ -287,17 +255,6 @@ async def import_opportunities_by_category(
                 created_count += page_created
                 skipped_count += page_skipped
 
-                _dbg("emag_marketplace.py:_run:page_commit", "page committed", {
-                    "page": page,
-                    "products_len": len(products),
-                    "batch_len": len(batch),
-                    "page_created": page_created,
-                    "page_skipped": page_skipped,
-                    "total_created": created_count,
-                    "total_skipped": skipped_count,
-                    "meta": meta,
-                    "created_pnks_count": len(created_pnks),
-                }, "H_commit_page")
 
                 # ---- fetch images + update thumbnail_image (global by PNK) ----
                 # Deduplicate pnks and chunk to 100
@@ -316,7 +273,7 @@ async def import_opportunities_by_category(
                         img_res = page_obj.evaluate(f"""
                             async () => {{
                                 try {{
-                                    const res = await fetch('https://marketplace.emag.ro/ui/offer/images', {{
+                                    const res = await fetch('{web_base}/ui/offer/images', {{
                                         method: 'POST',
                                         headers: {{
                                             'content-type': 'application/json',
@@ -333,26 +290,11 @@ async def import_opportunities_by_category(
                             }}
                         """)
                         if isinstance(img_res, str) and img_res.startswith("ERROR_JS_"):
-                            _dbg("emag_marketplace.py:_run:images_error", "images fetch error", {
-                                "page": page,
-                                "chunk_len": len(chunk),
-                                "error": img_res[:200],
-                            }, "H_images_error")
                             continue
                         if not isinstance(img_res, dict):
-                            _dbg("emag_marketplace.py:_run:images_error", "images response not dict", {
-                                "page": page,
-                                "chunk_len": len(chunk),
-                                "type": type(img_res).__name__,
-                            }, "H_images_error")
                             continue
 
                         if img_res.get("isError"):
-                            _dbg("emag_marketplace.py:_run:images_error", "images isError", {
-                                "page": page,
-                                "chunk_len": len(chunk),
-                                "messages": img_res.get("messages"),
-                            }, "H_images_error")
                             continue
 
                         results = img_res.get("results") or []
@@ -376,31 +318,15 @@ async def import_opportunities_by_category(
                                 )
                             db.commit()
 
-                        _dbg("emag_marketplace.py:_run:images_update", "images updated", {
-                            "page": page,
-                            "chunk_len": len(chunk),
-                            "results_len": len(results) if isinstance(results, list) else None,
-                            "rows_updated": updated,
-                        }, "H_images_update")
 
                         time.sleep(0.4)
 
-            _dbg("emag_marketplace.py:_run:commit", "import finished", {
-                "created": created_count,
-                "skipped": skipped_count,
-                "per_page": per_page,
-                "max_pages": max_pages,
-            }, "H_commit_ok")
             logger.info(
                 f"[opportunities import] keyword='{keyword_str}' created_keyword={created_keyword} "
                 f"created={created_count} skipped={skipped_count} shop_id={shop_id}"
             )
         except Exception as e:
             db.rollback()
-            _dbg("emag_marketplace.py:_run:exception", "import failed", {
-                "error_type": type(e).__name__,
-                "error": str(e)[:500],
-            }, "H_backend_exception")
             logger.error(f"[opportunities import] failed: {e}", exc_info=True)
         finally:
             try:

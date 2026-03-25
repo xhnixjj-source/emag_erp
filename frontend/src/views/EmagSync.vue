@@ -49,13 +49,13 @@
             </template>
             <el-form :model="accountForm" label-width="80px" size="small">
               <el-form-item label="平台">
-                <el-select v-model="accountForm.platform" placeholder="选择平台" style="width: 100%" disabled>
-                  <el-option label="eMAG Romania" value="ro" />
-                  <el-option label="eMAG Bulgaria" value="bg" />
-                  <el-option label="eMAG Hungary" value="hu" />
-                  <el-option label="Fashion Days RO" value="fashiondays-ro" />
-                  <el-option label="Fashion Days BG" value="fashiondays-bg" />
-                </el-select>
+                <template v-if="selectedShop">
+                  <el-tag type="info">{{ platformLabels[selectedShop.platform] || selectedShop.platform }}</el-tag>
+                  <div style="font-size: 12px; color: #909399; margin-top: 6px; line-height: 1.4">
+                    API 与「登录后台」均使用该站点；更换国家/平台请在「编辑店铺」中修改。
+                  </div>
+                </template>
+                <span v-else style="color: #909399">请先选择店铺</span>
               </el-form-item>
               <el-form-item label="用户名">
                 <el-input v-model="accountForm.username" placeholder="API用户名（从店铺自动填充）" />
@@ -2108,6 +2108,10 @@ onMounted(async () => {
 // 切换店铺时重新加载数据
 watch(selectedShopId, (newVal) => {
   onShopSelected(newVal)
+  const shop = shops.value.find((s) => s.id === newVal)
+  if (shop && (shop.platform === 'ro' || shop.platform === 'bg' || shop.platform === 'hu')) {
+    adsSyncMarketplace.value = shop.platform
+  }
   // 重新加载当前 tab 数据
   handleTabChange(activeTab.value)
 })

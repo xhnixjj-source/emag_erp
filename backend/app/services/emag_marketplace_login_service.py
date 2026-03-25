@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from playwright.sync_api import BrowserContext, Page
 from sqlalchemy.orm import Session
@@ -16,9 +17,17 @@ from app.utils.playwright_manager import get_playwright_pool
 from app.utils.bitbrowser_manager import bitbrowser_manager
 from app.config import config, get_project_root
 from app.models.emag_sync import EmagInboundShipment, EmagInboundShipmentDetail
-from app.models.emag_sync import EmagInboundShipment, EmagInboundShipmentDetail
 
 logger = logging.getLogger(__name__)
+
+# 卖家中心网页/API-UI 使用的站点根 URL（与 API 文档中 Marketplace URL 对应，不含尾部斜杠）
+MARKETPLACE_WEB_BASE_URLS: Dict[str, str] = {
+    "ro": "https://marketplace.emag.ro",
+    "bg": "https://marketplace.emag.bg",
+    "hu": "https://marketplace.emag.hu",
+    "fashiondays-ro": "https://marketplace-ro.fashiondays.com",
+    "fashiondays-bg": "https://marketplace-bg.fashiondays.com",
+}
 
 
 @dataclass
@@ -42,8 +51,6 @@ class EmagMarketplaceLoginService:
     _instance: Optional["EmagMarketplaceLoginService"] = None
     _instance_lock = threading.Lock()
 
-    MARKETPLACE_HOME = "https://marketplace.emag.ro/"
-    DASHBOARD_URL = "https://marketplace.emag.ro/dashboard"
     AUTH_STORAGE_FILE = "emag_marketplace_auth.json"  # 默认登录状态文件（无 shop_id 时兼容）
 
     def __new__(cls) -> "EmagMarketplaceLoginService":
@@ -70,9 +77,6 @@ class EmagMarketplaceLoginService:
         # 用于手动登录模式的独立 browser 实例（不使用 pool）
         self._playwright_instance = None
         self._browser_instance = None
-        # 用于手动登录模式的独立 browser 实例（不使用 pool）
-        self._playwright_instance = None
-        self._browser_instance = None
 
         self._status: str = "not_logged_in"  # not_logged_in|logging_in|auto_filling|waiting_manual_login|logged_in|error
         self._last_error: Optional[str] = None
@@ -88,11 +92,51 @@ class EmagMarketplaceLoginService:
         project_root = get_project_root()
         self._auth_storage_path = project_root / self.AUTH_STORAGE_FILE
 
+        # 当前店铺对应的卖家中心根 URL（由 EmagShop.platform 决定）
+        self._resolved_platform: str = "ro"
+        self._marketplace_web_base: str = "https://marketplace.emag.ro"
+        self._marketplace_home: str = "https://marketplace.emag.ro/"
+        self._dashboard_url: str = "https://marketplace.emag.ro/dashboard"
+        self._load_shop_platform_and_urls()
+
         self._initialized = True
 
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
+
+    def _load_shop_platform_and_urls(self) -> None:
+        """根据当前 shop_id 从数据库读取 platform，设置卖家中心与 dashboard URL。"""
+        platform_key = "ro"
+        if self._current_shop_id:
+            try:
+                from app.database import SessionLocal
+                from app.models.emag_sync import EmagShop
+
+                db = SessionLocal()
+                try:
+                    row = db.query(EmagShop).filter(EmagShop.id == self._current_shop_id).first()
+                    if row and row.platform:
+                        platform_key = (row.platform or "ro").strip().lower()
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.warning("加载店铺 platform 失败，使用默认 ro: %s", e)
+        self._resolved_platform = platform_key
+        base = MARKETPLACE_WEB_BASE_URLS.get(platform_key) or MARKETPLACE_WEB_BASE_URLS["ro"]
+        self._marketplace_web_base = base.rstrip("/")
+        self._marketplace_home = self._marketplace_web_base + "/"
+        self._dashboard_url = self._marketplace_web_base + "/dashboard"
+        logger.info(
+            "卖家中心 URL 已解析: platform=%s base=%s",
+            self._resolved_platform,
+            self._marketplace_web_base,
+        )
+
+    def get_marketplace_web_base(self) -> str:
+        """当前店铺对应的卖家中心根 URL（无尾部斜杠），供路由层拼装 api-ui。"""
+        with self._lock:
+            return self._marketplace_web_base
 
     def _get_auth_storage_path(self, shop_id: Optional[int] = None) -> Path:
         """获取登录状态文件路径。每个店铺独立一份 auth 文件。"""
@@ -106,6 +150,7 @@ class EmagMarketplaceLoginService:
         with self._lock:
             self._current_shop_id = shop_id
             self._auth_storage_path = self._get_auth_storage_path(shop_id)
+            self._load_shop_platform_and_urls()
 
     def get_current_shop_id(self) -> Optional[int]:
         """获取当前登录关联的店铺 ID"""
@@ -121,6 +166,8 @@ class EmagMarketplaceLoginService:
                 "captcha_screenshot_b64": self._last_captcha_png_b64,
                 "page_info": info,
                 "shop_id": self._current_shop_id,
+                "platform": self._resolved_platform,
+                "marketplace_web_base": self._marketplace_web_base,
             }
     
     def get_sync_status(self) -> Dict[str, Any]:
@@ -163,6 +210,8 @@ class EmagMarketplaceLoginService:
             return self.get_login_status()
         
         try:
+            # 与当前 shop_id 对齐卖家中心域名（路由层会先 set_current_shop_id）
+            self._load_shop_platform_and_urls()
             with self._lock:
                 self._status = "logging_in"
                 self._last_error = None
@@ -190,25 +239,15 @@ class EmagMarketplaceLoginService:
             need_fallback = False  # 是否需要弹窗 fallback
             
             try:
-                page.goto(self.MARKETPLACE_HOME, wait_until="domcontentloaded", timeout=20000)
+                page.goto(self._marketplace_home, wait_until="domcontentloaded", timeout=20000)
                 time.sleep(1)
                 
                 current_url = page.url or ""
                 logger.info(f"导航完成，当前 URL: {current_url}")
-                
-                # #region agent log
-                import json as _dbg_j6; _dbg_lp6 = r"d:\emag_erp\.cursor\debug.log"
-                def _dbg_w6(loc, msg, data, hyp):
-                    try:
-                        import time as _t
-                        with open(_dbg_lp6, "a", encoding="utf-8") as _f:
-                            _f.write(_dbg_j6.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
-                    except Exception:
-                        pass
+
+                # storage_state 是否仍表示已登录（URL / 页面元素）
                 _is_li = self._is_logged_in(page)
-                _has_dash = "dashboard" in current_url
-                _dbg_w6("login_svc:login:phase1_check", "login state check at phase 1", {"url": current_url, "_is_logged_in": _is_li, "dashboard_in_url": _has_dash, "username_provided": bool(username), "password_provided": bool(password)}, "H5,H7")
-                # #endregion
+                _has_dash = "dashboard" in (current_url or "").lower()
 
                 if _is_li or _has_dash:
                     # storage_state 仍然有效，直接登录成功
@@ -221,9 +260,6 @@ class EmagMarketplaceLoginService:
                     logger.info("开始自动填充登录表单（多步登录）...")
                     auto_fill_ok = self._fill_login_form_multistep(page, username, password)
                     
-                    # #region agent log
-                    _dbg_w6("login_svc:login:auto_fill_result", "auto fill result", {"auto_fill_ok": auto_fill_ok, "url_after": page.url}, "H7")
-                    # #endregion
 
                     if not auto_fill_ok:
                         logger.warning("自动填充登录表单失败，将切换到弹窗 fallback")
@@ -295,7 +331,7 @@ class EmagMarketplaceLoginService:
                         context = browser.new_context()
                     
                     page = context.new_page()
-                    page.goto(self.MARKETPLACE_HOME, wait_until="domcontentloaded", timeout=20000)
+                    page.goto(self._marketplace_home, wait_until="domcontentloaded", timeout=20000)
                     time.sleep(1)
                     
                     # 如果有用户名密码，先尝试预填（方便用户直接提交）
@@ -398,7 +434,7 @@ class EmagMarketplaceLoginService:
                     for attempt in range(max_retries):
                         logger.info(f"尝试导航到 dashboard (第 {attempt + 1}/{max_retries} 次)")
                         try:
-                            page.goto(self.DASHBOARD_URL, wait_until="domcontentloaded", timeout=15000)
+                            page.goto(self._dashboard_url, wait_until="domcontentloaded", timeout=15000)
                             time.sleep(2)  # 等待页面加载和可能的重定向
                             final_url = page.url
                             logger.info(f"导航完成，当前 URL: {final_url}")
@@ -418,7 +454,7 @@ class EmagMarketplaceLoginService:
                                         self._status = "not_logged_in"
                                         self._last_error = "登录状态已失效，请重新登录"
                                     return self.get_login_status()
-                            elif "dashboard" in final_url or "marketplace.emag.ro" in final_url:
+                            elif "dashboard" in final_url or self._is_on_marketplace_site(final_url):
                                 # 成功到达 dashboard 或 marketplace 页面
                                 logger.info(f"成功导航到目标页面: {final_url}")
                                 break
@@ -569,7 +605,7 @@ class EmagMarketplaceLoginService:
                     for attempt in range(max_retries):
                         logger.info(f"尝试导航到 dashboard (第 {attempt + 1}/{max_retries} 次)")
                         try:
-                            page.goto(self.DASHBOARD_URL, wait_until="domcontentloaded", timeout=15000)
+                            page.goto(self._dashboard_url, wait_until="domcontentloaded", timeout=15000)
                             time.sleep(2)  # 等待页面加载和可能的重定向
                             final_url = page.url
                             logger.info(f"导航完成，当前 URL: {final_url}")
@@ -589,7 +625,7 @@ class EmagMarketplaceLoginService:
                                         self._status = "not_logged_in"
                                         self._last_error = "登录状态已失效，请重新登录"
                                     return self.get_login_status()
-                            elif "dashboard" in final_url or "marketplace.emag.ro" in final_url:
+                            elif "dashboard" in final_url or self._is_on_marketplace_site(final_url):
                                 # 成功到达 dashboard 或 marketplace 页面
                                 logger.info(f"成功导航到目标页面: {final_url}")
                                 break
@@ -1166,42 +1202,40 @@ class EmagMarketplaceLoginService:
             logger.exception(f"检测手机验证码时出错: {e}")
             return False
 
-    # 公共首页 URL 模式（未登录时跳转到的页面）
-    _PUBLIC_PAGE_PATTERNS = ("/ro", "/bg", "/hu", "/pl")
+    def _marketplace_netloc(self) -> str:
+        return urlparse(self._marketplace_web_base).netloc
+
+    def _is_on_marketplace_site(self, url: str) -> bool:
+        return self._marketplace_netloc() in (url or "")
+
+    def _path_is_public_emag_locale(self, url: str) -> bool:
+        """eMAG 各站未登录时的多语言公共入口 /ro、/bg、/hu、/pl。"""
+        try:
+            p = urlparse(url or "")
+            if p.netloc != self._marketplace_netloc():
+                return False
+            if "emag" not in p.netloc.lower():
+                return False
+            path = (p.path or "").rstrip("/")
+            return path in ("/ro", "/bg", "/hu", "/pl")
+        except Exception:
+            return False
 
     def _is_logged_in(self, page: Page) -> bool:
         """
         通过 URL + 页面元素双重判断已登录态（尽量稳健）。
         """
-        # #region agent log
-        import json as _dbg_j5
-        _dbg_lp5 = r"d:\emag_erp\.cursor\debug.log"
-        def _dbg_w5(loc, msg, data, hyp):
-            try:
-                import time as _t
-                with open(_dbg_lp5, "a", encoding="utf-8") as _f:
-                    _f.write(_dbg_j5.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-        # #endregion
         try:
             url = page.url or ""
 
-            # 排除公共首页：marketplace.emag.ro/ro, /bg, /hu 等是未登录公共页面
-            url_path = url.rstrip("/").split("marketplace.emag.ro")[-1] if "marketplace.emag.ro" in url else ""
-            if url_path in self._PUBLIC_PAGE_PATTERNS:
-                # #region agent log
-                _dbg_w5("login_svc:_is_logged_in", "public page detected -> False", {"url": url, "url_path": url_path}, "H5")
-                # #endregion
+            if self._path_is_public_emag_locale(url):
                 return False
 
-            if "marketplace.emag.ro/dashboard" in url:
-                # #region agent log
-                _dbg_w5("login_svc:_is_logged_in", "dashboard in URL -> True", {"url": url}, "H5")
-                # #endregion
+            dash_path = f"{self._marketplace_web_base}/dashboard"
+            if dash_path in url or ("/dashboard" in url and self._is_on_marketplace_site(url)):
                 return True
-            # 有时会跳到别的后台页，只要不是 auth 域并且出现 dashboard 元素就算登录
-            if "auth.emag" not in url and "marketplace.emag.ro" in url:
+            # 有时会跳到别的后台页，只要不是 auth 域并且在当前卖家中心域下
+            if "auth.emag" not in url and self._is_on_marketplace_site(url):
                 # 常见左侧菜单或顶部账户菜单
                 logged_in_markers = [
                     'a[href*="/dashboard"]',
@@ -1213,9 +1247,6 @@ class EmagMarketplaceLoginService:
                     loc = page.locator(sel)
                     cnt = loc.count()
                     if cnt > 0:
-                        # #region agent log
-                        _dbg_w5("login_svc:_is_logged_in", "marker matched", {"url": url, "selector": sel, "count": cnt}, "H5")
-                        # #endregion
                         return True
         except Exception:
             return False
@@ -1281,37 +1312,6 @@ class EmagMarketplaceLoginService:
             (playwright_instance, browser, context, page) 元组
             调用方负责在使用完毕后关闭 browser 和 playwright_instance。
         """
-        # #region agent log
-        import json as _dbg_json
-        _dbg_log_path = r"d:\emag_erp\.cursor\debug.log"
-        def _dbg_write(loc, msg, data, hyp):
-            try:
-                import time as _t
-                with open(_dbg_log_path, "a", encoding="utf-8") as _f:
-                    _f.write(_dbg_json.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-        try:
-            import os as _dbg_os
-            _dbg_write(
-                "login_svc:_create_authed_page:entry",
-                "enter _create_authed_page",
-                {
-                    "dashboard_url": getattr(self, "DASHBOARD_URL", None),
-                    "auth_storage_path": str(self._auth_storage_path),
-                    "path_exists": self._auth_storage_path.exists(),
-                    "current_shop_id": getattr(self, "_current_shop_id", None),
-                    "env_proxy_keys_present": {
-                        "HTTP_PROXY": bool(_dbg_os.environ.get("HTTP_PROXY")),
-                        "HTTPS_PROXY": bool(_dbg_os.environ.get("HTTPS_PROXY")),
-                        "NO_PROXY": bool(_dbg_os.environ.get("NO_PROXY")),
-                    },
-                },
-                "S1",
-            )
-        except Exception:
-            pass
-        # #endregion
 
         if not self._auth_storage_path.exists():
             raise Exception("未找到保存的登录状态，请先登录")
@@ -1323,53 +1323,9 @@ class EmagMarketplaceLoginService:
         page = context.new_page()
 
         # 导航到 Dashboard（而非首页），已登录时会停留在 dashboard，未登录时会被重定向
-        # #region agent log
         try:
-            import time as _dbg_t2
-            _t0 = _dbg_t2.monotonic()
-            _dbg_write(
-                "login_svc:_create_authed_page:pre_goto",
-                "about to goto DASHBOARD_URL",
-                {"target_url": getattr(self, "DASHBOARD_URL", None), "timeout_ms": 15000, "wait_until": "domcontentloaded"},
-                "S2",
-            )
-        except Exception:
-            _t0 = None
-        # #endregion
-        try:
-            resp = page.goto(self.DASHBOARD_URL, wait_until="domcontentloaded", timeout=15000)
-            # #region agent log
-            try:
-                import time as _dbg_t3
-                _elapsed = int((_dbg_t3.monotonic() - _t0) * 1000) if _t0 is not None else None
-                _dbg_write(
-                    "login_svc:_create_authed_page:goto_ok",
-                    "goto DASHBOARD_URL ok",
-                    {
-                        "elapsed_ms": _elapsed,
-                        "response_status": (resp.status if resp else None),
-                        "response_url": (resp.url if resp else None),
-                        "page_url": (page.url or ""),
-                    },
-                    "S2",
-                )
-            except Exception:
-                pass
-            # #endregion
+            resp = page.goto(self._dashboard_url, wait_until="domcontentloaded", timeout=15000)
         except Exception as _goto_e:
-            # #region agent log
-            try:
-                import time as _dbg_t4
-                _elapsed = int((_dbg_t4.monotonic() - _t0) * 1000) if _t0 is not None else None
-                _dbg_write(
-                    "login_svc:_create_authed_page:goto_err",
-                    "goto DASHBOARD_URL error",
-                    {"elapsed_ms": _elapsed, "error_type": type(_goto_e).__name__, "error": str(_goto_e)[:300], "page_url": (page.url or "")},
-                    "S3",
-                )
-            except Exception:
-                pass
-            # #endregion
             raise
 
         time.sleep(2)
@@ -1379,8 +1335,8 @@ class EmagMarketplaceLoginService:
         # 判断是否在 dashboard 或其他已登录的后台页面
         on_dashboard = "dashboard" in current_url
         on_auth_page = "auth.emag" in current_url or "/login" in current_url
-        # 公共首页 /ro, /bg, /hu 等表示被踢出登录
-        on_public_page = bool(current_url.rstrip("/").split("/")[-1] in ("ro", "bg", "hu") and "marketplace.emag" in current_url)
+        # 公共首页 /ro, /bg, /hu 等表示被踢出登录（仅 eMAG 多语言入口）
+        on_public_page = self._path_is_public_emag_locale(current_url)
 
         logged_in = on_dashboard and not on_auth_page and not on_public_page
 
@@ -1437,10 +1393,11 @@ class EmagMarketplaceLoginService:
                 
                 logger.info(f"正在获取第 {current_page + 1} 页...")
                 
+                web_base = self._marketplace_web_base
                 result = page_obj.evaluate(f"""
                     async () => {{
                         try {{
-                            const res = await fetch('https://marketplace.emag.ro/api-ui/fio/reception/list', {{
+                            const res = await fetch('{web_base}/api-ui/fio/reception/list', {{
                                 method: 'POST',
                                 headers: {{ 
                                     'content-type': 'application/json',
@@ -1587,10 +1544,11 @@ class EmagMarketplaceLoginService:
                     f"Fetching opportunities: category_doc_id={category_doc_id}, page={page}, per_page={per_page}"
                 )
 
+                web_base = self._marketplace_web_base
                 result = page_obj.evaluate(f"""
                     async () => {{
                         try {{
-                            const res = await fetch('https://marketplace.emag.ro/api-ui/opportunities/', {{
+                            const res = await fetch('{web_base}/api-ui/opportunities/', {{
                                 method: 'POST',
                                 headers: {{
                                     'content-type': 'application/json',
@@ -1613,29 +1571,6 @@ class EmagMarketplaceLoginService:
                 if not isinstance(result, dict):
                     raise RuntimeError(f"Unexpected opportunities response: {type(result).__name__}")
 
-                # #region agent log
-                try:
-                    import json as _dbg_json_o
-                    import time as _dbg_time_o
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_dbg_json_o.dumps({
-                            "runId": "pre-fix",
-                            "hypothesisId": "H_opportunities_response_shape",
-                            "location": "emag_marketplace_login_service.py:fetch_opportunities_by_category",
-                            "message": "page response summary",
-                            "data": {
-                                "category_doc_id": category_doc_id,
-                                "page": page,
-                                "result_keys": list(result.keys()) if isinstance(result, dict) else None,
-                                "message_field": result.get("message"),
-                                "has_data": isinstance(result.get("data"), dict),
-                                "data_keys": list((result.get("data") or {}).keys()) if isinstance(result.get("data"), dict) else None,
-                            },
-                            "timestamp": int(_dbg_time_o.time() * 1000),
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
 
                 data = result.get("data") or {}
                 meta = data.get("meta") or {}
@@ -1705,10 +1640,11 @@ class EmagMarketplaceLoginService:
                     "category_doc_id": category_doc_id,
                 }
 
+                web_base = self._marketplace_web_base
                 result = page_obj.evaluate(f"""
                     async () => {{
                         try {{
-                            const res = await fetch('https://marketplace.emag.ro/api-ui/opportunities/', {{
+                            const res = await fetch('{web_base}/api-ui/opportunities/', {{
                                 method: 'POST',
                                 headers: {{
                                     'content-type': 'application/json',
@@ -1735,28 +1671,6 @@ class EmagMarketplaceLoginService:
                 meta = data.get("meta") or {}
                 products = data.get("products") or []
 
-                # #region agent log
-                try:
-                    import json as _dbg_json_o2
-                    import time as _dbg_time_o2
-                    with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                        _f.write(_dbg_json_o2.dumps({
-                            "runId": "pre-fix",
-                            "hypothesisId": "H_iter_page",
-                            "location": "emag_marketplace_login_service.py:iter_opportunities_by_category",
-                            "message": "yield page",
-                            "data": {
-                                "category_doc_id": category_doc_id,
-                                "page": page,
-                                "products_len": (len(products) if isinstance(products, list) else None),
-                                "meta_page": (meta.get("page") if isinstance(meta, dict) else None),
-                                "meta_total_count": (meta.get("total_count") if isinstance(meta, dict) else None),
-                            },
-                            "timestamp": int(_dbg_time_o2.time() * 1000),
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
 
                 if not products:
                     yield page, meta if isinstance(meta, dict) else None, []
@@ -1786,19 +1700,8 @@ class EmagMarketplaceLoginService:
         pw, browser, context, page_obj = None, None, None, None
         try:
             pw, browser, context, page_obj = self._create_authed_page()
-            
-            # #region agent log
-            import json as _dbg_json2
-            _dbg_log_path2 = r"d:\emag_erp\.cursor\debug.log"
-            def _dbg_write2(loc, msg, data, hyp):
-                try:
-                    import time as _t
-                    with open(_dbg_log_path2, "a", encoding="utf-8") as _f:
-                        _f.write(_dbg_json2.dumps({"timestamp": int(_t.time()*1000), "location": loc, "message": msg, "data": data, "hypothesisId": hyp}, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-            _dbg_write2("login_svc:sync_shipments:page_ready", "page state before fetch", {"url": page_obj.url, "title": page_obj.title()}, "H2,H3")
-            # #endregion
+
+            web_base = self._marketplace_web_base
 
             # 1. 获取运单列表
             logger.info("正在获取运单列表...")
@@ -1808,15 +1711,11 @@ class EmagMarketplaceLoginService:
                 "page": 1,
                 "rows": limit
             }
-            
-            # #region agent log
-            _dbg_write2("login_svc:sync_shipments:before_fetch", "about to call JS fetch", {"page_url": page_obj.url}, "H3,H4")
-            # #endregion
 
             list_res = page_obj.evaluate(f"""
                 async () => {{
                     try {{
-                        const res = await fetch('https://marketplace.emag.ro/api-ui/fio/reception/list', {{
+                        const res = await fetch('{web_base}/api-ui/fio/reception/list', {{
                             method: 'POST',
                             headers: {{ 
                                 'content-type': 'application/json',
@@ -1833,9 +1732,6 @@ class EmagMarketplaceLoginService:
                 }}
             """)
             
-            # #region agent log
-            _dbg_write2("login_svc:sync_shipments:after_fetch", "fetch result", {"type": type(list_res).__name__, "is_error": isinstance(list_res, str) and str(list_res).startswith("ERROR_JS_"), "preview": str(list_res)[:500]}, "H2,H3,H4")
-            # #endregion
 
             if isinstance(list_res, str) and list_res.startswith("ERROR_JS_"):
                 raise RuntimeError(f"获取运单列表失败: {list_res}")
@@ -1925,7 +1821,7 @@ class EmagMarketplaceLoginService:
                             async () => {{
                                 try {{
                                     // 1. 获取 Header
-                                    const hRes = await fetch('https://marketplace.emag.ro/api-ui/fio/get-reception-header/{reception_id}', {{
+                                    const hRes = await fetch('{web_base}/api-ui/fio/get-reception-header/{reception_id}', {{
                                         method: 'GET',
                                         headers: {{ 'x-requested-with': 'XMLHttpRequest' }}
                                     }});
@@ -1939,7 +1835,7 @@ class EmagMarketplaceLoginService:
                                         let pageSize = 100;
                                         let hasMore = true;
                                         while (hasMore) {{
-                                            const lRes = await fetch('https://marketplace.emag.ro/api-ui/fio/reception-line/list', {{
+                                            const lRes = await fetch('{web_base}/api-ui/fio/reception-line/list', {{
                                                 method: 'POST',
                                                 headers: {{
                                                     'content-type': 'application/json',
@@ -1977,7 +1873,7 @@ class EmagMarketplaceLoginService:
                         detail_data = page_obj.evaluate(js_fetch_lines)
                     else:
                         # 对于 finalized / receiving 等状态，继续使用原有的已上架数量接口
-                        detail_url = f"https://marketplace.emag.ro/api-ui/fio/get-transferred-to-storage-quantity/{reception_id}"
+                        detail_url = f"{web_base}/api-ui/fio/get-transferred-to-storage-quantity/{reception_id}"
                         detail_data = page_obj.evaluate(f"""
                             async () => {{
                                 try {{

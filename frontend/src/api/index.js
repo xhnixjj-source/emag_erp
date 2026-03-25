@@ -15,7 +15,6 @@ api.interceptors.request.use(
     const token = localStorage.getItem('token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
-    } else {
     }
     return config
   },
@@ -45,7 +44,6 @@ api.interceptors.response.use(
           localStorage.removeItem('token')
           // Dispatch to store to clear auth state
           // We'll handle redirect in router guard
-        } else {
         }
       } else {
         ElMessage.error(data.detail || '请求失败')

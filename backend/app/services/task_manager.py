@@ -109,25 +109,19 @@ class TaskManager:
             db=db
         )
         
-        print(f"[任务添加] 任务已添加到队列 - 任务ID: {task_id}, 类型: {task_type}, 优先级: {priority}, 用户ID: {user_id}, 产品URL: {product_url}")
         logger.info(
             f"Added task {task_id} (type={task_type}, priority={priority}, user={user_id})"
         )
         
         # Start worker if not running
         if not self.running and config.TASK_MANAGER_ENABLED:
-            print(f"[任务管理器] 启动任务管理器 - 当前运行状态: {self.running}, 启用状态: {config.TASK_MANAGER_ENABLED}")
             self.start()
-        else:
-            print(f"[任务管理器] 任务管理器已运行或未启用 - 运行状态: {self.running}, 启用状态: {config.TASK_MANAGER_ENABLED}")
         
         return task_id
     
     def _execute_task(self, task_id: int):
         """Execute a single task"""
         start_time = time.time()
-        # 强制输出到控制台，确保日志可见
-        print(f"[任务执行] 开始执行任务 - 任务ID: {task_id}")
         logger.info(f"[任务执行] 开始执行任务 - 任务ID: {task_id}")
         
         db = SessionLocal()
@@ -166,7 +160,6 @@ class TaskManager:
             # Execute task
             try:
                 task_url = getattr(task, 'product_url', None) or (f"关键字ID: {task.keyword_id}" if task.keyword_id else "未知")
-                print(f"[任务执行] 调用任务处理器 - 任务ID: {task_id}, 任务类型: {task_type_for_log}, 目标: {task_url}")
                 logger.info(f"[任务执行] 调用任务处理器 - 任务ID: {task_id}, 任务类型: {task_type_for_log}, 目标: {task_url}")
                 result = handler(task_id, task, db)
                 
@@ -228,7 +221,6 @@ class TaskManager:
     
     def _worker_loop(self, worker_name: str):
         """Worker thread loop"""
-        print(f"[工作线程] 工作线程启动 - {worker_name}")
         logger.info(f"Worker thread {worker_name} started")
         
         # 批量重试检查间隔（秒），避免频繁检查
@@ -266,7 +258,6 @@ class TaskManager:
                             retried_count = self.task_queue.retry_failed_tasks(db=db, max_tasks=50)
                             if retried_count > 0:
                                 logger.info(f"[批量重试] 重试了 {retried_count} 个失败的任务")
-                                print(f"[批量重试] 重试了 {retried_count} 个失败的任务")
                                 last_batch_retry_check = current_time
                                 # Continue immediately to process retried tasks
                                 continue
@@ -281,7 +272,6 @@ class TaskManager:
                     continue
                 
                 
-                print(f"[任务调度] 工作线程获取到任务 - 工作线程: {worker_name}, 任务ID: {task_id}")
                 logger.info(f"[任务调度] 工作线程获取到任务 - 工作线程: {worker_name}, 任务ID: {task_id}")
                 
                 # Add to active tasks
@@ -312,14 +302,12 @@ class TaskManager:
         """
         with self._init_lock:
             if self.running:
-                print(f"[任务管理器] 任务管理器已在运行")
                 logger.warning("Task manager is already running")
                 return
             
             self.running = True
             self._stop_event.clear()
             
-            print(f"[任务管理器] 启动任务管理器 - 工作线程数: {num_workers}")
             for i in range(num_workers):
                 worker_name = f"worker-{i+1}"
                 thread = threading.Thread(
@@ -330,9 +318,7 @@ class TaskManager:
                 )
                 thread.start()
                 self._worker_threads[worker_name] = thread
-                print(f"[任务管理器] 工作线程已启动 - {worker_name}")
             
-            print(f"[任务管理器] 任务管理器启动完成 - 工作线程数: {num_workers}")
             logger.info(f"Task manager started with {num_workers} workers")
     
     def stop(self, wait: bool = True):

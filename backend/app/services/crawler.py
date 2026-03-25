@@ -1841,16 +1841,6 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
         
         logger.info(f"[爬取完成] 产品数据爬取完成 - 任务ID: {task_id}, 产品URL: {product_url}, 数据字段数: {len(product_data)}")
         
-        # #region agent log
-        import json as _json_save
-        _ranking_keys = ['category_rank', 'ad_category_rank', 'store_rank', 'shop_rank', 'ad_rank']
-        _basic_keys = ['title', 'product_name', 'price', 'stock_count', 'stock', 'review_count', 'brand', 'shop_name', 'latest_review_date', 'latest_review_at', 'listed_at']
-        _ranking_data = {k: product_data.get(k) for k in _ranking_keys}
-        _basic_data = {k: str(product_data.get(k))[:50] if product_data.get(k) is not None else None for k in _basic_keys}
-        _is_emag = product_data.get('is_emag_official', False)
-        with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-            _f.write(_json_save.dumps({"timestamp": int(time.time()*1000), "location": "crawler.py:product_data_received", "message": "爬取结果数据", "data": {"task_id": task_id, "url": product_url, "all_keys": list(product_data.keys()), "ranking": _ranking_data, "basic": _basic_data, "total_fields": len(product_data), "is_emag_official": _is_emag}, "hypothesisId": "G1,G2,H_emag_detect", "runId": "emag-official-fix"}, default=str) + "\n")
-        # #endregion
         
         # Update task progress
         task.progress = 80
@@ -1880,12 +1870,6 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
         
         if existing:
             # Update existing record
-            # #region agent log
-            _matched = [k for k in product_data.keys() if k != 'product_url' and hasattr(existing, k)]
-            _dropped = [k for k in product_data.keys() if k != 'product_url' and not hasattr(existing, k)]
-            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json_save.dumps({"timestamp": int(time.time()*1000), "location": "crawler.py:update_existing", "message": "更新现有记录-字段匹配", "data": {"task_id": task_id, "url": product_url, "is_new": False, "matched_fields": _matched, "dropped_fields": _dropped, "existing_shop_rank": existing.shop_rank, "existing_category_rank": existing.category_rank, "existing_ad_rank": existing.ad_rank, "existing_stock": existing.stock, "existing_product_name": str(existing.product_name)[:50] if existing.product_name else None, "listed_at_from_keyword_link": keyword_link_listed_at is not None, "final_listed_at": str(final_listed_at) if final_listed_at else None}, "hypothesisId": "G1,G4", "runId": "field-debug"}, default=str) + "\n")
-            # #endregion
             
             for key, value in product_data.items():
                 if key != 'product_url' and hasattr(existing, key):
@@ -1936,10 +1920,6 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
             db.add(filter_pool_item)
             db.commit()
             
-            # #region agent log
-            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json_save.dumps({"timestamp": int(time.time()*1000), "location": "crawler.py:insert_new", "message": "插入新记录", "data": {"task_id": task_id, "url": product_url, "is_new": True, "shop_rank": shop_rank_value, "category_rank": category_rank_value, "ad_rank": ad_rank_value, "price": product_data.get('price'), "stock": product_data.get('stock_count') or product_data.get('stock'), "product_name": str(product_data.get('title') or product_data.get('product_name'))[:50]}, "hypothesisId": "G1,G4", "runId": "field-debug"}, default=str) + "\n")
-            # #endregion
             logger.info(f"[数据保存] 添加新产品数据 - 任务ID: {task_id}, 产品URL: {product_url}")
         
         # 监控池批量导入：关联筛选池并立即跑一轮监控快照
@@ -1997,28 +1977,6 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
     except Exception as e:
         total_elapsed = time.time() - start_time if 'start_time' in locals() else 0
         logger.error(f"[任务失败] 产品爬取任务失败 - 任务ID: {task_id}, 产品URL: {task.product_url if task else 'N/A'}, 错误: {str(e)}, 错误类型: {type(e).__name__}, 耗时: {total_elapsed:.2f}秒", exc_info=True)
-        # #region agent log
-        import json as _json_fail, time as _time_fail
-        try:
-            with open(r"d:\emag_erp\.cursor\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(_json_fail.dumps({
-                    "timestamp": int(_time_fail.time() * 1000),
-                    "location": "crawler.py:task_failed",
-                    "message": "产品爬取任务最终失败",
-                    "data": {
-                        "task_id": task_id,
-                        "product_url": task.product_url if task else None,
-                        "error_type": type(e).__name__,
-                        "error_message": str(e)[:300],
-                        "elapsed_sec": round(total_elapsed, 2),
-                    },
-                    "hypothesisId": "H_timeout_captcha",
-                    "runId": "retry-debug"
-                }, ensure_ascii=False) + "\n")
-        except Exception:
-            # 调试日志失败不影响主流程
-            pass
-        # #endregion
 
         # 不在这里更新任务状态，让task_manager统一处理
         # task_manager会记录错误并标记任务为FAILED
