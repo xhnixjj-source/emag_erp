@@ -239,8 +239,9 @@ class BitBrowserManager:
                     logger.warning("[BitBrowser] 获取独占窗口超时（等待 %.0f 秒后仍无可用窗口）", timeout)
                     return None
 
+                in_use_count = sum(1 for w in self._windows.values() if w.in_use)
                 logger.debug("[BitBrowser] 所有窗口忙碌 (%d/%d)，等待释放... (剩余 %.1fs)",
-                             _in_use_count, len(self._windows), remaining)
+                             in_use_count, len(self._windows), remaining)
                 # 阻塞等待，直到有窗口释放或超时
                 self._window_available.wait(timeout=min(remaining, 10))
 

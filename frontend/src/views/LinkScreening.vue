@@ -26,114 +26,155 @@
         </div>
       </template>
 
-      <!-- 筛选器 -->
-      <el-form :inline="true" class="filter-form">
-        <el-form-item label="关键字">
-          <el-select 
-            v-model="selectedKeywordId" 
-            placeholder="选择关键字" 
-            clearable
-            filterable
-            @change="loadLinks"
-            style="width: 200px"
-          >
-            <el-option
-              v-for="kw in keywords"
-              :key="kw.id"
-              :label="kw.keyword"
-              :value="kw.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="来源">
-          <el-select
-            v-model="filters.source"
-            placeholder="全部来源"
-            clearable
-            @change="loadLinks"
-            style="width: 150px"
-          >
-            <el-option label="关键字搜索" value="keyword_search" />
-            <el-option label="Chrome 插件" value="chrome_extension" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="标签">
-          <el-select
-            v-model="filters.tag"
-            placeholder="全部标签"
-            clearable
-            @change="loadLinks"
-            style="width: 150px"
-          >
-            <el-option label="Super Hot" value="Super Hot" />
-            <el-option label="Hot" value="Hot" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="价格区间">
-          <el-input-number v-model="filters.price_min" :min="0" :precision="2" placeholder="最低价" style="width: 120px" />
-          <span style="margin: 0 5px">-</span>
-          <el-input-number v-model="filters.price_max" :min="0" :precision="2" placeholder="最高价" style="width: 120px" />
-        </el-form-item>
-        <el-form-item label="评论数">
-          <el-input-number v-model="filters.review_count_min" :min="0" placeholder="最少评论" style="width: 120px" />
-          <span style="margin: 0 5px">-</span>
-          <el-input-number v-model="filters.review_count_max" :min="0" placeholder="最多评论" style="width: 120px" />
-        </el-form-item>
-        <el-form-item label="评分">
-          <el-input-number v-model="filters.rating_min" :min="0" :max="5" :precision="2" placeholder="最低评分" style="width: 120px" />
-          <span style="margin: 0 5px">-</span>
-          <el-input-number v-model="filters.rating_max" :min="0" :max="5" :precision="2" placeholder="最高评分" style="width: 120px" />
-        </el-form-item>
-        <el-form-item label="跟卖数">
-          <el-input-number v-model="filters.offer_count_min" :min="0" placeholder="最少跟卖" style="width: 120px" />
-          <span style="margin: 0 5px">-</span>
-          <el-input-number v-model="filters.offer_count_max" :min="0" placeholder="最多跟卖" style="width: 120px" />
-        </el-form-item>
-        <el-form-item label="上架日期">
-          <el-select
-            v-model="filters.listed_at_period"
-            placeholder="全部"
-            clearable
-            style="width: 150px"
-          >
-            <el-option label="近半年" value="6months" />
-            <el-option label="近1年" value="1year" />
-            <el-option label="近1.5年" value="1.5years" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="品牌剔除">
-          <el-select
-            v-model="filters.exclude_brands"
-            placeholder="选择要剔除的品牌"
-            multiple
-            filterable
-            clearable
-            style="width: 300px"
-          >
-            <el-option
-              v-for="brand in brands"
-              :key="brand"
-              :label="brand"
-              :value="brand"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="爬取时间">
-          <el-date-picker
-            v-model="filters.crawled_at_range"
-            type="datetimerange"
-            range-separator="至"
-            start-placeholder="开始时间"
-            end-placeholder="结束时间"
-            format="YYYY-MM-DD HH:mm:ss"
-            value-format="YYYY-MM-DDTHH:mm:ss"
-            style="width: 350px"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button @click="loadLinks">搜索</el-button>
-          <el-button @click="resetFilters">重置</el-button>
-        </el-form-item>
+      <!-- 筛选器（布局与筛选池一致：栅格 + 区间无步进器） -->
+      <el-form :model="filters" label-width="96px" class="filter-form">
+        <el-row :gutter="10">
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="关键字">
+              <el-select
+                v-model="selectedKeywordId"
+                placeholder="选择关键字"
+                clearable
+                filterable
+                @change="loadLinks"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="kw in keywords"
+                  :key="kw.id"
+                  :label="kw.keyword"
+                  :value="kw.id"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="来源">
+              <el-select
+                v-model="filters.source"
+                placeholder="全部来源"
+                clearable
+                @change="loadLinks"
+                style="width: 100%"
+              >
+                <el-option label="关键字搜索" value="keyword_search" />
+                <el-option label="Chrome 插件" value="chrome_extension" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="标签">
+              <el-select
+                v-model="filters.tag"
+                placeholder="全部标签"
+                clearable
+                @change="loadLinks"
+                style="width: 100%"
+              >
+                <el-option label="Super Hot" value="Super Hot" />
+                <el-option label="Hot" value="Hot" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="售价区间">
+              <div class="range-input-wrapper">
+                <el-input-number v-model="filters.price_min" :min="0" :precision="2" :controls="false" placeholder="最低" />
+                <span class="separator">-</span>
+                <el-input-number v-model="filters.price_max" :min="0" :precision="2" :controls="false" placeholder="最高" />
+              </div>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="采购价区间">
+              <div class="range-input-wrapper">
+                <el-input-number v-model="filters.purchase_price_min" :min="0" :precision="2" :controls="false" placeholder="最低" />
+                <span class="separator">-</span>
+                <el-input-number v-model="filters.purchase_price_max" :min="0" :precision="2" :controls="false" placeholder="最高" />
+              </div>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="评论数">
+              <div class="range-input-wrapper">
+                <el-input-number v-model="filters.review_count_min" :min="0" :controls="false" placeholder="最少" />
+                <span class="separator">-</span>
+                <el-input-number v-model="filters.review_count_max" :min="0" :controls="false" placeholder="最多" />
+              </div>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="评分">
+              <div class="range-input-wrapper">
+                <el-input-number v-model="filters.rating_min" :min="0" :max="5" :precision="2" :controls="false" placeholder="最低" />
+                <span class="separator">-</span>
+                <el-input-number v-model="filters.rating_max" :min="0" :max="5" :precision="2" :controls="false" placeholder="最高" />
+              </div>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="跟卖数">
+              <div class="range-input-wrapper">
+                <el-input-number v-model="filters.offer_count_min" :min="0" :controls="false" placeholder="最少" />
+                <span class="separator">-</span>
+                <el-input-number v-model="filters.offer_count_max" :min="0" :controls="false" placeholder="最多" />
+              </div>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="上架日期">
+              <el-select
+                v-model="filters.listed_at_period"
+                placeholder="全部"
+                clearable
+                style="width: 100%"
+              >
+                <el-option label="近半年" value="6months" />
+                <el-option label="近1年" value="1year" />
+                <el-option label="近1.5年" value="1.5years" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="24" :md="16" :lg="12" :xl="8">
+            <el-form-item label="品牌剔除">
+              <el-select
+                v-model="filters.exclude_brands"
+                placeholder="选择要剔除的品牌"
+                multiple
+                filterable
+                clearable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="brand in brands"
+                  :key="brand"
+                  :label="brand"
+                  :value="brand"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="24" :md="16" :lg="12" :xl="8">
+            <el-form-item label="爬取时间">
+              <el-date-picker
+                v-model="filters.crawled_at_range"
+                type="datetimerange"
+                range-separator="至"
+                start-placeholder="开始时间"
+                end-placeholder="结束时间"
+                format="YYYY-MM-DD HH:mm:ss"
+                value-format="YYYY-MM-DDTHH:mm:ss"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="操作">
+              <el-button type="primary" @click="loadLinks">搜索</el-button>
+              <el-button @click="resetFilters">重置</el-button>
+            </el-form-item>
+          </el-col>
+        </el-row>
       </el-form>
 
       <el-divider />
@@ -319,6 +360,8 @@ const total = ref(0)
 const filters = reactive({
   price_min: null,
   price_max: null,
+  purchase_price_min: null,
+  purchase_price_max: null,
   review_count_min: null,
   review_count_max: null,
   rating_min: null,
@@ -344,45 +387,8 @@ const loadKeywords = async () => {
 const loadBrands = async () => {
   try {
     const response = await keywordsApi.getBrands()
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location: 'LinkScreening.vue:loadBrands',
-        message: 'loadBrands success',
-        data: {
-          rawResponseKeys: Object.keys(response || {}),
-          brandsFromData: Array.isArray(response?.data?.brands) ? response.data.brands.length : null,
-          brandsFromRoot: Array.isArray(response?.brands) ? response.brands.length : null
-        },
-        runId: 'pre-fix-1',
-        hypothesisId: 'H1,H2,H3,H4',
-        timestamp: Date.now()
-      })
-    }).catch(() => {})
-    // #endregion
-
     brands.value = response.data?.brands || response.brands || []
   } catch (error) {
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/fa287b08-cc79-4533-9772-24c8be69156a', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location: 'LinkScreening.vue:loadBrands',
-        message: 'loadBrands error',
-        data: {
-          errorMessage: error?.message || String(error || ''),
-          errorName: error?.name || null
-        },
-        runId: 'pre-fix-1',
-        hypothesisId: 'H2,H3,H4',
-        timestamp: Date.now()
-      })
-    }).catch(() => {})
-    // #endregion
-
     ElMessage.error('加载品牌列表失败')
   }
 }
@@ -437,7 +443,14 @@ const loadLinks = async () => {
     if (filters.exclude_brands && filters.exclude_brands.length > 0) {
       params.exclude_brands = filters.exclude_brands
     }
-    
+
+    if (filters.purchase_price_min !== null && filters.purchase_price_min !== undefined) {
+      params.purchase_price_min = filters.purchase_price_min
+    }
+    if (filters.purchase_price_max !== null && filters.purchase_price_max !== undefined) {
+      params.purchase_price_max = filters.purchase_price_max
+    }
+
     // 调用 API（不传 keywordId，而是通过 params 传递）
     const response = await keywordsApi.getKeywordLinks(null, params)
     
@@ -476,6 +489,8 @@ const loadLinks = async () => {
 const resetFilters = () => {
   filters.price_min = null
   filters.price_max = null
+  filters.purchase_price_min = null
+  filters.purchase_price_max = null
   filters.review_count_min = null
   filters.review_count_max = null
   filters.rating_min = null
@@ -643,7 +658,24 @@ onMounted(() => {
 }
 
 .filter-form {
-  margin-bottom: 20px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.range-input-wrapper {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 260px;
+}
+.range-input-wrapper :deep(.el-input-number) {
+  flex: 0 0 auto;
+  width: 110px;
+}
+.range-input-wrapper .separator {
+  flex-shrink: 0;
+  margin: 0 8px;
+  color: #909399;
 }
 
 .table-header {

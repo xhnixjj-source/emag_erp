@@ -269,6 +269,8 @@ async def get_keyword_links(
     limit: int = 100,
     price_min: Optional[float] = None,
     price_max: Optional[float] = None,
+    purchase_price_min: Optional[float] = None,
+    purchase_price_max: Optional[float] = None,
     review_count_min: Optional[int] = None,
     review_count_max: Optional[int] = None,
     rating_min: Optional[float] = None,
@@ -298,6 +300,13 @@ async def get_keyword_links(
             query = query.filter(KeywordLink.price >= price_min)
         if price_max is not None:
             query = query.filter(KeywordLink.price <= price_max)
+        # 采购价区间：仅保留 purchase_price 有值的记录
+        if purchase_price_min is not None or purchase_price_max is not None:
+            query = query.filter(KeywordLink.purchase_price.isnot(None))
+            if purchase_price_min is not None:
+                query = query.filter(KeywordLink.purchase_price >= purchase_price_min)
+            if purchase_price_max is not None:
+                query = query.filter(KeywordLink.purchase_price <= purchase_price_max)
         if review_count_min is not None:
             query = query.filter(KeywordLink.review_count >= review_count_min)
         if review_count_max is not None:
