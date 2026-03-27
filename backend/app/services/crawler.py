@@ -1363,49 +1363,51 @@ def _competitor_count_for_filter_pool(
 def crawl_monitor_product(
     monitor_id: int,
     product_url: str,
-    db: Session
 ) -> Optional[Dict[str, Any]]:
     """
-    Crawl product data for monitoring and save to history
-    
-    使用ProductDataCrawler.crawl_dynamic_data()仅爬取动态数据
-    从FilterPool获取shop_url和category_url，避免重复爬取
-    
+    Crawl product data for monitoring（仅爬取，不写库；由调用方写入 MonitorHistory）
+
+    使用 ProductDataCrawler.crawl_dynamic_data() 仅爬取动态数据。
+    从 FilterPool 获取 shop_url / category_url 时使用短连接，避免在长时间爬取期间占用连接池。
+
     Args:
         monitor_id: Monitor pool ID
         product_url: Product URL to crawl
-        db: Database session
-        
+
     Returns:
-        归一化后的监控字段 dict（与 scheduler / 路由写入 MonitorHistory 的键一致），失败返回 None。
-        字段：price, stock, review_count, reviews_score, shop_rank, category_rank, ad_rank
+        归一化后的监控字段 dict（与 MonitorHistory 一致），失败返回 None。
     """
+    shop_url = None
+    category_url = None
+    from app.models.monitor_pool import MonitorPool
+
+    _db = SessionLocal()
     try:
-        # 从MonitorPool获取filter_pool_id，然后从FilterPool获取链接
-        from app.models.monitor_pool import MonitorPool
-        monitor = db.query(MonitorPool).filter(MonitorPool.id == monitor_id).first()
-        
-        shop_url = None
-        category_url = None
-        
+        monitor = _db.query(MonitorPool).filter(MonitorPool.id == monitor_id).first()
         if monitor and monitor.filter_pool_id:
-            filter_pool = db.query(FilterPool).filter(FilterPool.id == monitor.filter_pool_id).first()
+            filter_pool = _db.query(FilterPool).filter(FilterPool.id == monitor.filter_pool_id).first()
             if filter_pool:
                 shop_url = filter_pool.shop_url
                 category_url = filter_pool.category_url
                 if shop_url or category_url:
-                    logger.info(f"[监控爬取] 从FilterPool获取链接 - monitor_id: {monitor_id}, shop_url: {shop_url}, category_url: {category_url}")
-        
-        # 使用新的Playwright爬取器，仅爬取动态数据
+                    logger.info(
+                        f"[监控爬取] 从FilterPool获取链接 - monitor_id: {monitor_id}, "
+                        f"shop_url: {shop_url}, category_url: {category_url}"
+                    )
+    finally:
+        _db.close()
+
+    try:
+        # 使用新的Playwright爬取器，仅爬取动态数据（不持有 ORM Session）
         crawler = ProductDataCrawler()
-        
+
         def _crawl():
             return crawler.crawl_dynamic_data(
                 product_url=product_url,
                 task_id=None,  # Monitor tasks don't use crawl_tasks table
-                db=db,
-                shop_url=shop_url,  # 传入从FilterPool获取的shop_url
-                category_url=category_url  # 传入从FilterPool获取的category_url
+                db=None,
+                shop_url=shop_url,
+                category_url=category_url,
             )
         
         # 使用retry_manager包装爬取调用，自动处理重试和错误记录
@@ -1933,7 +1935,7 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
                 db.commit()
                 db.refresh(mon)
                 try:
-                    pdata = crawl_monitor_product(mon.id, product_url, db)
+                    pdata = crawl_monitor_product(mon.id, product_url)
                     if pdata:
                         hist = MonitorHistory(
                             monitor_pool_id=mon.id,

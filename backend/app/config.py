@@ -23,6 +23,10 @@ class Config:
     
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./emag_erp.db")
+    # 非 SQLite 时生效：连接池（批量监控多线程会并发占连接，建议 ≥ MONITOR_THREADS）
+    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "20"))
+    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "40"))
+    DB_POOL_RECYCLE: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
 
     # Proxy configuration
     # 代理配置说明：

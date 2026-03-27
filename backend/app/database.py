@@ -4,10 +4,23 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from app.config import config
 
+_is_sqlite = "sqlite" in (config.DATABASE_URL or "")
+
+_engine_kwargs = {
+    "echo": False,
+    "pool_pre_ping": True,
+}
+if not _is_sqlite:
+    _engine_kwargs.update(
+        pool_size=config.DB_POOL_SIZE,
+        max_overflow=config.DB_MAX_OVERFLOW,
+        pool_recycle=config.DB_POOL_RECYCLE,
+    )
+
 engine = create_engine(
     config.DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in config.DATABASE_URL else {},
-    echo=False  # 设置为True可以查看SQL语句，便于调试
+    connect_args={"check_same_thread": False} if _is_sqlite else {},
+    **_engine_kwargs,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -363,8 +363,8 @@ async def trigger_monitor(
             detail="Monitor is not active"
         )
     
-    # Crawl product data
-    product_data = crawl_monitor_product(monitor_id, monitor.product_url, db)
+    # Crawl product data（爬取阶段不占用请求内 Session，避免长耗时占连接）
+    product_data = crawl_monitor_product(monitor_id, monitor.product_url)
     
     if not product_data:
         raise HTTPException(

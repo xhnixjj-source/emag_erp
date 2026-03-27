@@ -170,30 +170,25 @@ def run_listed_at_backfill_job() -> None:
 def _crawl_single_monitor(monitor_id: int, product_url: str) -> bool:
     """
     Crawl a single monitor product and save to history
-    
-    Args:
-        monitor_id: Monitor pool ID
-        product_url: Product URL to crawl
-        
-    Returns:
-        True if successful, False otherwise
+
+    短连接校验 → 长时间爬取（不占用 Session）→ 短连接写入，避免批量监控时占满连接池。
     """
     db = SessionLocal()
     try:
-        # Verify monitor still exists and is active
         monitor = db.query(MonitorPool).filter(MonitorPool.id == monitor_id).first()
         if not monitor or monitor.status != MonitorStatus.ACTIVE:
             logger.warning(f"Monitor {monitor_id} not found or not active")
             return False
-        
-        # Crawl product data
-        product_data = crawl_monitor_product(monitor_id, product_url, db)
-        
-        if not product_data:
-            logger.warning(f"Failed to crawl product data for monitor {monitor_id}")
-            return False
-        
-        # crawl_monitor_product 已返回归一化 dict，键名与 MonitorHistory 一致
+    finally:
+        db.close()
+
+    product_data = crawl_monitor_product(monitor_id, product_url)
+    if not product_data:
+        logger.warning(f"Failed to crawl product data for monitor {monitor_id}")
+        return False
+
+    db = SessionLocal()
+    try:
         history = MonitorHistory(
             monitor_pool_id=monitor_id,
             price=product_data.get('price'),
@@ -203,19 +198,17 @@ def _crawl_single_monitor(monitor_id: int, product_url: str) -> bool:
             shop_rank=product_data.get('shop_rank'),
             category_rank=product_data.get('category_rank'),
             ad_rank=product_data.get('ad_rank'),
-            monitored_at=datetime.utcnow()
+            monitored_at=datetime.utcnow(),
         )
-        
         db.add(history)
-        
-        # Update monitor's last_monitored_at
+        monitor = db.query(MonitorPool).filter(MonitorPool.id == monitor_id).first()
+        if not monitor:
+            logger.warning(f"Monitor {monitor_id} disappeared before save")
+            return False
         monitor.last_monitored_at = datetime.utcnow()
-        
         db.commit()
-        
         logger.info(f"Successfully crawled and saved monitor {monitor_id}")
         return True
-        
     except Exception as e:
         logger.error(f"Error crawling monitor {monitor_id}: {e}", exc_info=True)
         db.rollback()
