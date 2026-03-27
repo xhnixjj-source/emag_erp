@@ -253,19 +253,22 @@ class TaskManager:
                         self.task_queue.empty() and 
                         current_time - last_batch_retry_check >= batch_retry_check_interval):
                         # All tasks completed, try to retry failed tasks
+                        retried_count = 0
+                        db = None
                         try:
                             db = SessionLocal()
                             retried_count = self.task_queue.retry_failed_tasks(db=db, max_tasks=50)
                             if retried_count > 0:
                                 logger.info(f"[批量重试] 重试了 {retried_count} 个失败的任务")
-                                last_batch_retry_check = current_time
-                                # Continue immediately to process retried tasks
-                                continue
-                            db.close()
                             last_batch_retry_check = current_time
                         except Exception as retry_err:
                             logger.error(f"批量重试失败任务时出错: {retry_err}", exc_info=True)
                             last_batch_retry_check = current_time
+                        finally:
+                            if db is not None:
+                                db.close()
+                        if retried_count > 0:
+                            continue
                     
                     # No tasks available, wait a bit
                     time.sleep(0.5)

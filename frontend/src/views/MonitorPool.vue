@@ -9,7 +9,7 @@
             <el-button type="success" @click="handleMoveToProfit" :loading="movingToProfit" :disabled="selectedProducts.length === 0">
               加入产品库
             </el-button>
-            <el-button type="primary" @click="handleTriggerMonitor" :loading="triggering">
+            <el-button type="primary" @click="handleTriggerMonitor" :loading="triggering" :disabled="selectedProducts.length === 0">
               手动触发监控
             </el-button>
             <el-button @click="showScheduleDialog = true">定时任务配置</el-button>
@@ -400,11 +400,14 @@ const handleRemove = async (id) => {
 }
 
 const handleTriggerMonitor = async () => {
+  if (selectedProducts.value.length === 0) {
+    ElMessage.warning('请先勾选要监控的产品')
+    return
+  }
   triggering.value = true
   try {
-    const productIds = products.value.map(p => p.id)
-    await monitorPoolApi.triggerMonitor(productIds)
-    ElMessage.success('监控任务已触发')
+    await monitorPoolApi.triggerMonitor(selectedProducts.value)
+    ElMessage.success(`已触发 ${selectedProducts.value.length} 个产品的监控任务`)
   } catch (error) {
     ElMessage.error('触发监控失败')
   } finally {
