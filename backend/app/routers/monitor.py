@@ -10,7 +10,8 @@ from app.models.monitor_pool import MonitorPool, MonitorHistory, MonitorStatus
 from app.models.product import FilterPool
 from sqlalchemy import func, desc
 from app.services.operation_log_service import create_operation_log
-from app.services.scheduler import scheduler, trigger_monitor_manual
+from app.services.scheduler import scheduler, start_monitor_trigger_job_async
+from app.services.monitor_trigger_job import create_job, get_job
 from app.services.crawler import crawl_monitor_product
 from app.services.task_manager import task_manager
 from app.models.crawl_task import TaskType, TaskPriority
@@ -452,27 +453,16 @@ class TriggerBatchRequest(BaseModel):
 async def trigger_monitor_batch(
     request: TriggerBatchRequest,
     current_user: dict = Depends(require_auth),
-    db: Session = Depends(get_db)
 ):
-    """Manually trigger monitoring for multiple monitors"""
-    # Trigger monitoring (this runs in background)
-    result = trigger_monitor_manual(request.monitor_ids)
-    
-    # Log operation
-    create_operation_log(
-        db=db,
-        user_id=current_user["id"],
-        operation_type="monitor_trigger_batch",
-        target_type="monitor_pool",
-        operation_detail={
-            "monitor_ids": request.monitor_ids,
-            "processed": result.get("processed", 0),
-            "success": result.get("success", 0),
-            "failed": result.get("failed", 0)
-        }
-    )
-    
-    return result
+    """异步触发监控（立即返回 job_id，通过 GET /trigger/jobs/{job_id} 轮询）"""
+    job_id = create_job(current_user["id"])
+    start_monitor_trigger_job_async(job_id, request.monitor_ids)
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "message": "监控任务已启动",
+        "async": True,
+    }
 
 class ScheduleConfigResponse(BaseModel):
     """Schedule config response model"""
@@ -683,32 +673,36 @@ class TriggerMonitorRequest(BaseModel):
 async def trigger_monitor_batch_simple(
     request: TriggerMonitorRequest,
     current_user: dict = Depends(require_auth),
-    db: Session = Depends(get_db)
 ):
-    """Manually trigger monitoring for multiple monitors (simplified endpoint)"""
+    """手动触发监控：异步执行，立即返回 job_id，轮询 GET /trigger/jobs/{job_id} 查看进度"""
     product_ids = request.product_ids
     if not product_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="product_ids is required"
         )
-    
-    # Trigger monitoring (this runs in background)
-    result = trigger_monitor_manual(product_ids)
-    
-    # Log operation
-    create_operation_log(
-        db=db,
-        user_id=current_user["id"],
-        operation_type="monitor_trigger_batch",
-        target_type="monitor_pool",
-        operation_detail={
-            "monitor_ids": product_ids,
-            "processed": result.get("processed", 0),
-            "success": result.get("success", 0),
-            "failed": result.get("failed", 0)
-        }
-    )
-    
-    return result
+
+    job_id = create_job(current_user["id"])
+    start_monitor_trigger_job_async(job_id, product_ids)
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "message": "监控任务已启动",
+        "async": True,
+    }
+
+
+@router.get("/trigger/jobs/{job_id}", response_model=dict)
+async def get_monitor_trigger_job_status(
+    job_id: str,
+    current_user: dict = Depends(require_auth),
+):
+    """轮询手动监控任务进度"""
+    job = get_job(job_id, current_user["id"])
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在或已过期",
+        )
+    return job
 

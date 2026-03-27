@@ -18,6 +18,7 @@ export const monitorPoolApi = {
   getHistory: (productId, params) => api.get(`/monitor-pool/${productId}/history`, { params }),
   getScheduleConfig: () => api.get('/monitor-pool/schedule'),
   updateScheduleConfig: (config) => api.put('/monitor-pool/schedule', config),
-  triggerMonitor: (productIds) => api.post('/monitor-pool/trigger', { product_ids: productIds })
+  triggerMonitor: (productIds) => api.post('/monitor-pool/trigger', { product_ids: productIds }),
+  getTriggerJobStatus: (jobId) => api.get(`/monitor-pool/trigger/jobs/${jobId}`)
 }
 

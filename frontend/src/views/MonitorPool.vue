@@ -399,6 +399,35 @@ const handleRemove = async (id) => {
   }
 }
 
+const TRIGGER_POLL_INTERVAL_MS = 1500
+const TRIGGER_POLL_MAX = 2400
+
+const pollTriggerJob = (jobId) =>
+  new Promise((resolve, reject) => {
+    let n = 0
+    const poll = async () => {
+      try {
+        if (++n > TRIGGER_POLL_MAX) {
+          reject(new Error('监控任务轮询超时，请稍后刷新页面查看结果'))
+          return
+        }
+        const st = await monitorPoolApi.getTriggerJobStatus(jobId)
+        if (st.status === 'completed') {
+          resolve(st)
+          return
+        }
+        if (st.status === 'failed') {
+          reject(new Error(st.message || '监控任务失败'))
+          return
+        }
+        setTimeout(poll, TRIGGER_POLL_INTERVAL_MS)
+      } catch (e) {
+        reject(e)
+      }
+    }
+    poll()
+  })
+
 const handleTriggerMonitor = async () => {
   if (selectedProducts.value.length === 0) {
     ElMessage.warning('请先勾选要监控的产品')
@@ -406,10 +435,19 @@ const handleTriggerMonitor = async () => {
   }
   triggering.value = true
   try {
-    await monitorPoolApi.triggerMonitor(selectedProducts.value)
-    ElMessage.success(`已触发 ${selectedProducts.value.length} 个产品的监控任务`)
+    const res = await monitorPoolApi.triggerMonitor(selectedProducts.value)
+    const jobId = res.job_id
+    if (!jobId) {
+      ElMessage.error('未返回任务 ID')
+      return
+    }
+    const finalSt = await pollTriggerJob(jobId)
+    ElMessage.success(
+      `监控完成：成功 ${finalSt.success ?? 0}，失败 ${finalSt.failed ?? 0}，跳过 ${finalSt.skipped ?? 0}`
+    )
+    await loadProducts()
   } catch (error) {
-    ElMessage.error('触发监控失败')
+    ElMessage.error(error?.message || '触发监控失败')
   } finally {
     triggering.value = false
   }

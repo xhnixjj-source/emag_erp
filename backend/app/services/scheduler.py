@@ -1,6 +1,10 @@
 """Scheduler service for scheduled tasks"""
 import logging
+import threading
+from concurrent.futures import as_completed
 from datetime import datetime
+from typing import List, Optional
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.config import config
 from app.database import SessionLocal
@@ -9,6 +13,11 @@ from app.services.crawler import crawl_monitor_product
 from app.services.operation_log_service import create_operation_log
 from app.services.listed_at_backfill_service import run_backfill_once
 from app.utils.thread_pool import thread_pool_manager
+from app.services.monitor_trigger_job import (
+    finalize_job,
+    get_job_internal,
+    update_job,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -217,94 +226,217 @@ def _crawl_single_monitor(monitor_id: int, product_url: str) -> bool:
         db.close()
 
 
-def trigger_monitor_manual(monitor_ids: list[int] = None) -> dict:
+def run_manual_monitor_work(
+    monitor_ids: Optional[List[int]] = None,
+    job_id: Optional[str] = None,
+) -> dict:
     """
-    Manually trigger monitoring for specific monitors or all active monitors
-    只监控7天内的产品（从第一次监控成功的时间或创建时间开始计算）
-    
+    执行手动监控批次。若传入 job_id，则更新异步任务进度（供轮询）。
+
     Args:
-        monitor_ids: List of monitor IDs to process (None for all active)
-        
-    Returns:
-        Dictionary with processing results
+        monitor_ids: 要处理的监控池 ID；None 表示所有 ACTIVE
+        job_id: 可选，异步任务 ID
     """
+    from datetime import timedelta
+    from datetime import timezone as tz
+
     db = SessionLocal()
     try:
-        from datetime import timedelta
-        from datetime import timezone as tz
-        
-        # 计算7天前的时间
         seven_days_ago = datetime.now(tz.utc) - timedelta(days=7)
-        
+
         if monitor_ids:
             monitors = db.query(MonitorPool).filter(
                 MonitorPool.id.in_(monitor_ids),
-                MonitorPool.status == MonitorStatus.ACTIVE
+                MonitorPool.status == MonitorStatus.ACTIVE,
             ).all()
         else:
             monitors = db.query(MonitorPool).filter(
                 MonitorPool.status == MonitorStatus.ACTIVE
             ).all()
-        
+
         if not monitors:
-            return {"message": "No active monitors to process", "processed": 0}
-        
-        # 过滤出7天内的监控项
+            msg = "No active monitors to process"
+            if job_id:
+                finalize_job(
+                    job_id,
+                    "completed",
+                    msg,
+                    processed=0,
+                    success=0,
+                    failed=0,
+                    skipped=0,
+                )
+            return {
+                "message": msg,
+                "processed": 0,
+                "success": 0,
+                "failed": 0,
+                "skipped": 0,
+            }
+
         valid_monitors = []
         skipped_count = 0
         for monitor in monitors:
-            # 如果已经监控过，使用 last_monitored_at；否则使用 created_at
             check_date = monitor.last_monitored_at if monitor.last_monitored_at else monitor.created_at
             if check_date and check_date.replace(tzinfo=tz.utc) > seven_days_ago:
                 valid_monitors.append(monitor)
             else:
                 skipped_count += 1
-                logger.debug(f"Monitor {monitor.id} skipped: exceeded 7 days limit (check_date: {check_date})")
-        
+                logger.debug(
+                    f"Monitor {monitor.id} skipped: exceeded 7 days limit (check_date: {check_date})"
+                )
+
         if not valid_monitors:
+            msg = f"No active monitors within 7 days to process (skipped {skipped_count})"
+            if job_id:
+                finalize_job(
+                    job_id,
+                    "completed",
+                    msg,
+                    processed=0,
+                    success=0,
+                    failed=0,
+                    skipped=skipped_count,
+                )
             return {
-                "message": f"No active monitors within 7 days to process (skipped {skipped_count})",
+                "message": msg,
                 "processed": 0,
-                "skipped": skipped_count
+                "success": 0,
+                "failed": 0,
+                "skipped": skipped_count,
             }
-        
-        # Process monitors using thread pool
+
+        total = len(valid_monitors)
+        if job_id:
+            update_job(
+                job_id,
+                total=total,
+                skipped=skipped_count,
+                message=f"共 {total} 项，正在爬取…",
+            )
+
         futures = []
         for monitor in valid_monitors:
-            future = thread_pool_manager.submit(
+            fut = thread_pool_manager.submit(
                 "monitor",
                 _crawl_single_monitor,
                 monitor.id,
-                monitor.product_url
+                monitor.product_url,
             )
-            futures.append((monitor.id, future))
-        
-        # Wait for all tasks to complete
+            futures.append((monitor.id, fut))
+
+        fut_to_mid = {fut: mid for mid, fut in futures}
         success_count = 0
         failed_count = 0
-        
-        for monitor_id, future in futures:
+        processed = 0
+
+        for fut in as_completed(fut_to_mid.keys()):
+            mid = fut_to_mid[fut]
             try:
-                result = future.result(timeout=300)
+                result = fut.result(timeout=300)
                 if result:
                     success_count += 1
                 else:
                     failed_count += 1
             except Exception as e:
-                logger.error(f"Error processing monitor {monitor_id}: {e}")
+                logger.error(f"Error processing monitor {mid}: {e}")
                 failed_count += 1
-        
-        return {
-            "message": f"Processed {len(valid_monitors)} monitors (skipped {skipped_count} that exceeded 7 days)",
-            "processed": len(valid_monitors),
+            processed += 1
+            if job_id:
+                update_job(
+                    job_id,
+                    processed=processed,
+                    success=success_count,
+                    failed=failed_count,
+                    message=f"进行中 {processed}/{total}",
+                )
+
+        msg = (
+            f"Processed {total} monitors (skipped {skipped_count} that exceeded 7 days)"
+        )
+        result_dict = {
+            "message": msg,
+            "processed": total,
             "success": success_count,
             "failed": failed_count,
-            "skipped": skipped_count
+            "skipped": skipped_count,
         }
-        
+        if job_id:
+            finalize_job(
+                job_id,
+                "completed",
+                msg,
+                processed=total,
+                success=success_count,
+                failed=failed_count,
+                skipped=skipped_count,
+            )
+        return result_dict
+
     except Exception as e:
         logger.error(f"Error in manual monitor trigger: {e}", exc_info=True)
-        return {"message": f"Error: {str(e)}", "processed": 0}
+        err_msg = f"Error: {str(e)}"
+        if job_id:
+            finalize_job(
+                job_id,
+                "failed",
+                err_msg,
+                processed=0,
+                success=0,
+                failed=0,
+                skipped=0,
+            )
+        return {
+            "message": err_msg,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
     finally:
         db.close()
+
+
+def trigger_monitor_manual(monitor_ids: Optional[List[int]] = None) -> dict:
+    """同步执行手动监控（内部仍用线程池并发爬取，但会阻塞到全部完成）。"""
+    return run_manual_monitor_work(monitor_ids, job_id=None)
+
+
+def start_monitor_trigger_job_async(
+    job_id: str, monitor_ids: Optional[List[int]]
+) -> None:
+    """后台线程执行监控批次，用于 HTTP 立即返回 + 轮询进度。"""
+
+    def _run() -> None:
+        try:
+            result = run_manual_monitor_work(monitor_ids, job_id=job_id)
+            j = get_job_internal(job_id)
+            uid = j.get("user_id") if j else None
+            if uid is not None:
+                log_db = SessionLocal()
+                try:
+                    create_operation_log(
+                        db=log_db,
+                        user_id=uid,
+                        operation_type="monitor_trigger_batch",
+                        target_type="monitor_pool",
+                        operation_detail={
+                            "monitor_ids": monitor_ids,
+                            "processed": result.get("processed", 0),
+                            "success": result.get("success", 0),
+                            "failed": result.get("failed", 0),
+                            "job_id": job_id,
+                        },
+                    )
+                except Exception as log_err:
+                    logger.error(
+                        "monitor trigger job operation log failed: %s", log_err, exc_info=True
+                    )
+                finally:
+                    log_db.close()
+        except Exception as e:
+            logger.error(f"monitor trigger async job {job_id}: {e}", exc_info=True)
+            finalize_job(job_id, "failed", str(e))
+
+    threading.Thread(target=_run, name=f"monitor-trigger-{job_id[:8]}", daemon=True).start()
 
