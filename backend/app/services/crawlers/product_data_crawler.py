@@ -276,7 +276,17 @@ class ProductDataCrawler:
                 
                 # 提取排名（需要遍历多个页面）
                 if extract_rankings:
-                    
+                    # 先清 Cookie 再拉类目/店铺排名，减轻「刚访问详情页」带来的推荐/个性化导致排名虚高
+                    try:
+                        context.clear_cookies()
+                        logger.debug(
+                            f"[排名提取] 已清除浏览器上下文 Cookie 后再访问类目/店铺页 - URL: {product_url}"
+                        )
+                    except Exception as _clear_err:
+                        logger.warning(
+                            f"[排名提取] clear_cookies 失败（继续尝试排名）: {_clear_err}"
+                        )
+
                     ranking_start = time.time()
                     try:
                         rankings = self.dynamic_data_extractor.extract_rankings(

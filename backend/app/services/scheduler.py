@@ -24,6 +24,18 @@ logger = logging.getLogger(__name__)
 scheduler = BackgroundScheduler(timezone=config.SCHEDULER_TIMEZONE)
 
 
+def _within_seven_day_monitor_window(monitor: MonitorPool, seven_days_ago, tz) -> bool:
+    """
+    是否满足「7 天监控窗口」。
+    - 自有店铺（is_own_shop=True）：不限制 7 天，只要 ACTIVE 即参与监控。
+    - 非自有：仅当 last_monitored_at（或 created_at）落在最近 7 天内。
+    """
+    if getattr(monitor, "is_own_shop", False):
+        return True
+    check_date = monitor.last_monitored_at if monitor.last_monitored_at else monitor.created_at
+    return bool(check_date and check_date.replace(tzinfo=tz.utc) > seven_days_ago)
+
+
 def start_scheduler():
     """Start scheduler and register scheduled tasks"""
     # Register daily monitor task
@@ -60,7 +72,7 @@ def run_daily_monitor():
     """
     Run daily monitor task - crawl all active monitor pool products
     Uses thread pool for concurrent execution
-    只监控7天内的产品（从第一次监控成功的时间或创建时间开始计算）
+    非自有店铺：只监控 7 天内（last_monitored_at 或 created_at）；自有店铺不受 7 天限制。
     """
     db = SessionLocal()
     try:
@@ -70,32 +82,37 @@ def run_daily_monitor():
         # 计算7天前的时间
         seven_days_ago = datetime.now(tz.utc) - timedelta(days=7)
         
-        # Get all active monitors that are within 7 days
-        # 如果 last_monitored_at 存在，使用它；否则使用 created_at
+        # 全部 ACTIVE，再按 7 天窗口过滤（自有店铺不受限）
         monitors = db.query(MonitorPool).filter(
             MonitorPool.status == MonitorStatus.ACTIVE
         ).all()
         
-        # 过滤出7天内的监控项
+        # 过滤：非自有店铺仅 7 天内；自有店铺始终参与
         valid_monitors = []
         skipped_count = 0
         for monitor in monitors:
-            # 如果已经监控过，使用 last_monitored_at；否则使用 created_at
-            check_date = monitor.last_monitored_at if monitor.last_monitored_at else monitor.created_at
-            if check_date and check_date.replace(tzinfo=tz.utc) > seven_days_ago:
+            if _within_seven_day_monitor_window(monitor, seven_days_ago, tz):
                 valid_monitors.append(monitor)
             else:
                 skipped_count += 1
-                logger.debug(f"Monitor {monitor.id} skipped: exceeded 7 days limit (check_date: {check_date})")
-        
+                check_date = monitor.last_monitored_at if monitor.last_monitored_at else monitor.created_at
+                logger.debug(
+                    f"Monitor {monitor.id} skipped: exceeded 7 days limit (check_date: {check_date})"
+                )
+
         if skipped_count > 0:
-            logger.info(f"Skipped {skipped_count} monitors that exceeded 7 days limit")
-        
+            logger.info(
+                f"Skipped {skipped_count} non-own-shop monitors outside 7-day window"
+            )
+
         if not valid_monitors:
-            logger.info("No active monitors within 7 days to process")
+            logger.info("No active monitors to process (after 7-day filter for non-own-shop)")
             return
-        
-        logger.info(f"Starting daily monitor task for {len(valid_monitors)} products (skipped {skipped_count} that exceeded 7 days)")
+
+        logger.info(
+            f"Starting daily monitor task for {len(valid_monitors)} products "
+            f"(skipped {skipped_count} non-own-shop outside 7-day window)"
+        )
         
         # Process monitors using thread pool
         futures = []
@@ -233,6 +250,8 @@ def run_manual_monitor_work(
     """
     执行手动监控批次。若传入 job_id，则更新异步任务进度（供轮询）。
 
+    非自有店铺：仅处理 7 天窗口内项；自有店铺（is_own_shop）不受 7 天限制。
+
     Args:
         monitor_ids: 要处理的监控池 ID；None 表示所有 ACTIVE
         job_id: 可选，异步任务 ID
@@ -277,17 +296,17 @@ def run_manual_monitor_work(
         valid_monitors = []
         skipped_count = 0
         for monitor in monitors:
-            check_date = monitor.last_monitored_at if monitor.last_monitored_at else monitor.created_at
-            if check_date and check_date.replace(tzinfo=tz.utc) > seven_days_ago:
+            if _within_seven_day_monitor_window(monitor, seven_days_ago, tz):
                 valid_monitors.append(monitor)
             else:
                 skipped_count += 1
+                check_date = monitor.last_monitored_at if monitor.last_monitored_at else monitor.created_at
                 logger.debug(
                     f"Monitor {monitor.id} skipped: exceeded 7 days limit (check_date: {check_date})"
                 )
 
         if not valid_monitors:
-            msg = f"No active monitors within 7 days to process (skipped {skipped_count})"
+            msg = f"No monitors to process after filter (skipped {skipped_count})"
             if job_id:
                 finalize_job(
                     job_id,
@@ -352,7 +371,8 @@ def run_manual_monitor_work(
                 )
 
         msg = (
-            f"Processed {total} monitors (skipped {skipped_count} that exceeded 7 days)"
+            f"Processed {total} monitors "
+            f"(skipped {skipped_count} non-own-shop outside 7-day window)"
         )
         result_dict = {
             "message": msg,
