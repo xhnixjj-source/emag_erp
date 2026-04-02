@@ -14,6 +14,17 @@ from app.config import config
 
 logger = logging.getLogger(__name__)
 
+
+def _strip_tracking_headers_route(route) -> None:
+    """类目/店铺/介绍页请求统一去掉 Cookie、Referer，减轻 PDP 轨迹带来的个性化排序。"""
+    try:
+        headers = dict(route.request.headers)
+        for h in ("cookie", "Cookie", "referer", "Referer"):
+            headers.pop(h, None)
+        route.continue_(headers=headers)
+    except Exception:
+        route.continue_()
+
 # 延迟导入，避免循环依赖
 def _get_error_log_imports():
     """延迟导入ErrorLog相关模块"""
@@ -30,7 +41,7 @@ def _get_error_log_imports():
 _category_rank_cache: Dict[str, dict] = {}
 _category_rank_locks: Dict[str, threading.Lock] = {}
 _category_rank_global_lock = threading.Lock()
-_CATEGORY_CACHE_TTL = 300  # 5 分钟
+_CATEGORY_CACHE_TTL = config.RANKING_CACHE_TTL_SECONDS
 
 
 def _get_category_page_lock(page_url: str) -> threading.Lock:
@@ -47,7 +58,7 @@ def _get_category_page_lock(page_url: str) -> threading.Lock:
 _store_rank_cache: Dict[str, dict] = {}
 _store_rank_locks: Dict[str, threading.Lock] = {}
 _store_rank_global_lock = threading.Lock()
-_STORE_CACHE_TTL = 300  # 5 分钟
+_STORE_CACHE_TTL = config.RANKING_CACHE_TTL_SECONDS
 
 
 def _get_store_page_lock(page_url: str) -> threading.Lock:
@@ -101,6 +112,90 @@ class DynamicDataExtractor:
             base_url: 基础URL，用于解析相对链接
         """
         self.base_url = base_url
+
+    def clear_rank_caches(self) -> None:
+        """
+        清空进程内“类目/店铺排名页”缓存。
+
+        目的：在 BitBrowser 重启（换浏览器/会话状态）后，避免仍命中旧排序上下文的缓存结果。
+        """
+        try:
+            with _category_rank_global_lock:
+                _category_rank_cache.clear()
+        except Exception:
+            # 缓存清理失败不应影响主流程
+            logger.debug("Failed to clear category rank cache", exc_info=True)
+
+        try:
+            with _store_rank_global_lock:
+                _store_rank_cache.clear()
+        except Exception:
+            logger.debug("Failed to clear store rank cache", exc_info=True)
+
+    def extract_shop_url(self, page: Page, context) -> Optional[str]:
+        """
+        从商品详情页提取店铺商品列表页 URL（vendors/vendor/...）。
+
+        说明：
+        - 该方法会访问店铺介绍页以解析真正的店铺商品列表页 URL
+        - 供“PDP 与排名隔离”方案在 PDP 阶段提前获取 shop_url 使用
+        """
+        return self._extract_shop_url_from_page(page, context=context)
+
+    def extract_rankings_from_urls(
+        self,
+        context,
+        product_url: str,
+        category_url: Optional[str] = None,
+        shop_url: Optional[str] = None,
+        max_category_pages: int = 3,
+        max_store_pages: int = 2,
+        task_id: Optional[int] = None,
+        db=None,
+    ) -> Dict[str, Any]:
+        """
+        仅基于 URL 提取类目/店铺排名，不依赖商品详情页 DOM。
+
+        用途：在“窗口隔离”方案中，排名阶段使用全新窗口/全新 profile，
+        只打开类目/店铺列表页来计算排名，避免“先看详情页”污染推荐排序。
+        """
+        result: Dict[str, Any] = {}
+
+        if not context:
+            logger.warning("No context provided, skipping rankings extraction (urls-only)")
+            if task_id and db:
+                self._log_ranking_error(
+                    task_id, db, "no_context",
+                    f"排名提取跳过: 无context(urls-only) - URL: {product_url}"
+                )
+            return result
+
+        product_id = self._extract_product_id_from_url(product_url)
+        if not product_id:
+            logger.warning(f"Could not extract product ID from URL (urls-only): {product_url}")
+            return result
+
+        if category_url:
+            result["category_url"] = category_url
+            category_ranks = self._extract_category_rank(
+                context=context,
+                category_url=category_url,
+                product_id=product_id,
+                max_pages=max_category_pages,
+            )
+            result["category_rank"] = category_ranks.get("category_rank")
+            result["ad_category_rank"] = category_ranks.get("ad_category_rank")
+
+        if shop_url:
+            result["shop_url"] = shop_url
+            result["store_rank"] = self._extract_store_rank(
+                context=context,
+                shop_url=shop_url,
+                product_id=product_id,
+                max_pages=max_store_pages,
+            )
+
+        return result
     
     def extract_basic_fields(self, page: Page) -> Dict[str, Any]:
         """
@@ -185,6 +280,22 @@ class DynamicDataExtractor:
             raise
         
         return result
+
+    def _clear_personalization_for_ranking(self, context, page: Optional[Page] = None) -> None:
+        """清除 Cookie 与当前页的 Web Storage，降低「刚访问过详情」对后续列表排序的影响。"""
+        try:
+            context.clear_cookies()
+            logger.debug("[排名提取] 已清除 context cookies")
+        except Exception as _clear_err:
+            logger.debug(f"[排名提取] 清除 cookies 失败（可忽略）: {_clear_err}")
+        if page is not None:
+            try:
+                page.evaluate(
+                    "() => { try { localStorage.clear(); sessionStorage.clear(); } catch(e) {} }"
+                )
+                logger.debug("[排名提取] 已清除 localStorage/sessionStorage（当前页）")
+            except Exception:
+                pass
     
     def extract_rankings(
         self,
@@ -298,6 +409,9 @@ class DynamicDataExtractor:
                 logger.info(f"[排名提取] eMAG官方自营店，跳过所有排名提取（类目+广告+店铺）- URL: {product_url}")
                 return result
 
+            # 详情页 DOM 已读完：先清状态再访问介绍页/列表，避免 PDP 会话污染店铺介绍与后续排名
+            self._clear_personalization_for_ranking(context, page)
+
             # 优先尝试从已缓存的店铺数据中直接获取店铺排名（同一店铺且已加载过店铺页时生效）
             if shop_intro_url:
                 try:
@@ -369,18 +483,8 @@ class DynamicDataExtractor:
 
             
             
-            # ── 清除浏览器状态，消除个性化推荐对排名的影响 ──
-            try:
-                context.clear_cookies()
-                logger.debug("[排名提取] 已清除 context cookies")
-            except Exception as _clear_err:
-                logger.debug(f"[排名提取] 清除 cookies 失败（可忽略）: {_clear_err}")
-            # 清除 localStorage / sessionStorage（通过当前 page 执行）
-            try:
-                page.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch(e) {} }")
-                logger.debug("[排名提取] 已清除 localStorage/sessionStorage")
-            except Exception:
-                pass
+            # 介绍页可能已重新种 Cookie：类目列表前再清一次
+            self._clear_personalization_for_ranking(context, page)
             
             # 提取类目排名（遍历类目页前3页，仅在总类目下查找）
             try:
@@ -427,11 +531,8 @@ class DynamicDataExtractor:
             # 提取店铺排名（遍历店铺商品列表前2页），仅在成功提取 shop_url 时执行
             if shop_url:
                 try:
-                    # 再次清除 cookies 避免类目页浏览产生的个性化数据影响店铺排名
-                    try:
-                        context.clear_cookies()
-                    except Exception:
-                        pass
+                    # 类目页浏览可能又种 Cookie：店铺列表前再清一次
+                    self._clear_personalization_for_ranking(context, page)
                     result['store_rank'] = self._extract_store_rank(context, shop_url, product_id, max_pages=2)
                 except PlaywrightTimeoutError as store_to:
                     # 店铺排名访问超时：抛出异常，确保任务失败并触发重试
@@ -798,17 +899,7 @@ class DynamicDataExtractor:
         result: Dict[str, list] = {}
         category_page = context.new_page()
         try:
-            # 拦截请求：移除 Cookie 和 Referer，消除个性化
-            def _strip_tracking_headers(route):
-                try:
-                    headers = dict(route.request.headers)
-                    for h in ('cookie', 'Cookie', 'referer', 'Referer'):
-                        headers.pop(h, None)
-                    route.continue_(headers=headers)
-                except Exception:
-                    route.continue_()
-
-            category_page.route("**/*", _strip_tracking_headers)
+            category_page.route("**/*", _strip_tracking_headers_route)
             
             
             # ── 内部重试：类目页 goto 遇到瞬时网络错误时重试 ──
@@ -828,10 +919,9 @@ class DynamicDataExtractor:
                             category_page.close()
                         except Exception:
                             pass
-                        _time_cat_goto.sleep(5)
+                        time.sleep(5)
                         category_page = context.new_page()
-                        category_page.route("**/*", _strip_tracking_headers)
-                        _cat_goto_start = _time_cat_goto.time()  # 重置计时
+                        category_page.route("**/*", _strip_tracking_headers_route)
                     else:
                         raise
 
@@ -1015,16 +1105,7 @@ class DynamicDataExtractor:
             product_ranks: Dict[str, int] = {}
             try:
                 shop_page = context.new_page()
-                # 禁用 Cookie 和 Referer 避免个性化推荐
-                def _remove_tracking_shop(route):
-                    try:
-                        headers = dict(route.request.headers)
-                        for h in ('cookie', 'Cookie', 'referer', 'Referer'):
-                            headers.pop(h, None)
-                        route.continue_(headers=headers)
-                    except Exception:
-                        route.continue_()
-                shop_page.route("**/*", _remove_tracking_shop)
+                shop_page.route("**/*", _strip_tracking_headers_route)
                 
                 
                 # ── 内部重试：店铺页 goto 瞬时网络错误重试 ──
@@ -1043,10 +1124,9 @@ class DynamicDataExtractor:
                                 shop_page.close()
                             except Exception:
                                 pass
-                            _time_shop_goto.sleep(5)
+                            time.sleep(5)
                             shop_page = context.new_page()
-                            shop_page.route("**/*", _remove_tracking_shop)
-                            _shop_goto_start = _time_shop_goto.time()
+                            shop_page.route("**/*", _strip_tracking_headers_route)
                         else:
                             raise
                 
@@ -1223,7 +1303,7 @@ class DynamicDataExtractor:
             # 第二步：访问店铺介绍页，获取真正的店铺商品列表页URL
             try:
                 intro_page = context.new_page()
-                from app.config import config
+                intro_page.route("**/*", _strip_tracking_headers_route)
                 # ── 内部重试：ERR_EMPTY_RESPONSE 等瞬时网络错误重试 ──
                 _MAX_INTRO_GOTO = 3
                 for _intro_attempt in range(_MAX_INTRO_GOTO):
@@ -1245,8 +1325,9 @@ class DynamicDataExtractor:
                                 intro_page.close()
                             except Exception:
                                 pass
-                            _time_shop.sleep(5)
+                            time.sleep(5)
                             intro_page = context.new_page()
+                            intro_page.route("**/*", _strip_tracking_headers_route)
                         else:
                             raise  # 最后一次仍失败，抛出给外层
                 

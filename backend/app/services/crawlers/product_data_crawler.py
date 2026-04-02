@@ -273,75 +273,143 @@ class ProductDataCrawler:
                 except Exception as _dyn_err:
                     extract_elapsed = time.time() - extract_start
                     raise
+
+                # 通过 Istoric Preturi 接口补充上架日期（优先于页面 DOM 解析）
+                # 注意：根据 config.DISABLE_LISTED_AT 可临时整体屏蔽该步骤，后续可通过修改配置重新开启
+                if not config.DISABLE_LISTED_AT:
+                    try:
+                        # 在 BitBrowser 模式下，只使用浏览器网络通道调用，避免 Python requests 在当前网络环境下反复超时
+                        if config.BITBROWSER_ENABLED:
+                            listed_at = get_listed_at_via_browser(page, product_url)
+                        else:
+                            listed_at = get_istoric_listed_at(product_url)
+
+                        if listed_at:
+                            if not result.get("listed_at"):
+                                result["listed_at"] = listed_at
+                                logger.info(f"[上架日期] 通过 Istoric Preturi 获取上架日期成功 - URL: {product_url}, listed_at: {listed_at.isoformat()}")
+                            else:
+                                logger.debug(
+                                    f"[上架日期] 已存在 listed_at 字段，跳过 Istoric Preturi 覆盖 - URL: {product_url}, "
+                                    f"existing={result.get('listed_at')}, istoric={listed_at.isoformat()}"
+                                )
+                        else:
+                            logger.debug(f"[上架日期] Istoric Preturi 未返回上架日期 - URL: {product_url}")
+                    except Exception as e:
+                        logger.warning(f"[上架日期] 调用 Istoric Preturi 接口失败 - URL: {product_url}, 错误: {e}")
+                else:
+                    logger.debug(f"[上架日期] 已根据配置 DISABLE_LISTED_AT 屏蔽 Istoric Preturi 上架日期获取 - URL: {product_url}")
                 
                 # 提取排名（需要遍历多个页面）
                 if extract_rankings:
-                    # 先清 Cookie 再拉类目/店铺排名，减轻「刚访问详情页」带来的推荐/个性化导致排名虚高
-                    try:
-                        context.clear_cookies()
-                        logger.debug(
-                            f"[排名提取] 已清除浏览器上下文 Cookie 后再访问类目/店铺页 - URL: {product_url}"
-                        )
-                    except Exception as _clear_err:
-                        logger.warning(
-                            f"[排名提取] clear_cookies 失败（继续尝试排名）: {_clear_err}"
-                        )
-
                     ranking_start = time.time()
                     try:
-                        rankings = self.dynamic_data_extractor.extract_rankings(
-                            page=page,
-                            product_url=product_url,
-                            context=context,
-                            shop_url=shop_url,  # 传入从FilterPool获取的shop_url
-                            category_url=category_url,  # 传入从FilterPool获取的category_url
-                            task_id=task_id,  # 传递任务ID用于错误记录
-                            db=db  # 传递数据库会话用于错误记录
-                        )
+                        # BitBrowser：PDP 与排名使用不同窗口（不同 profile），彻底避免“先看详情页”污染推荐排序
+                        if config.BITBROWSER_ENABLED and window_info:
+                            # 1) PDP 阶段：尽可能拿到 shop_url / category_url
+                            if not category_url:
+                                category_url = result.get("category_url")
+                            if not shop_url:
+                                shop_url = result.get("shop_url")
+                            if not shop_url:
+                                try:
+                                    shop_url = self.dynamic_data_extractor.extract_shop_url(page=page, context=context)
+                                    if shop_url:
+                                        result["shop_url"] = shop_url
+                                except Exception as _shop_url_err:
+                                    logger.warning(f"[店铺URL提取失败] PDP阶段获取 shop_url 失败（将仅提取类目排名）: {_shop_url_err}")
+                                    shop_url = None
+
+                            # 2) 释放 PDP 资源与窗口 A
+                            try:
+                                if page:
+                                    page.close()
+                            except Exception:
+                                pass
+                            try:
+                                if context:
+                                    self.playwright_pool.release_context(context)
+                            except Exception:
+                                pass
+                            try:
+                                bitbrowser_manager.release_window(window_info["id"])
+                            except Exception as _rel_err:
+                                logger.warning(f"[BitBrowser释放失败] PDP阶段释放窗口失败（继续尝试排名）: {_rel_err}")
+
+                            page = None
+                            context = None
+                            window_info = None
+
+                            # 3) 排名阶段：获取全新窗口 B（新 profile / 新出口）
+                            rank_window = bitbrowser_manager.acquire_exclusive_window()
+                            if not rank_window:
+                                raise RuntimeError("无法获取可用的 BitBrowser 窗口（排名阶段）")
+
+                            rank_context = None
+                            try:
+                                rank_context = self.playwright_pool.acquire_context(
+                                    cdp_url=rank_window["ws"],
+                                    window_id=rank_window["id"],
+                                )
+
+                                rankings = self.dynamic_data_extractor.extract_rankings_from_urls(
+                                    context=rank_context,
+                                    product_url=product_url,
+                                    category_url=category_url,
+                                    shop_url=shop_url,
+                                    task_id=task_id,
+                                    db=db,
+                                )
+                            finally:
+                                try:
+                                    if rank_context:
+                                        self.playwright_pool.release_context(rank_context)
+                                except Exception:
+                                    pass
+                                try:
+                                    bitbrowser_manager.release_window(rank_window["id"])
+                                except Exception:
+                                    pass
+
+                        else:
+                            # 非 BitBrowser：保持原逻辑（清 Cookie + 旧 extract_rankings）
+                            try:
+                                context.clear_cookies()
+                                logger.debug(
+                                    f"[排名提取] 已清除浏览器上下文 Cookie 后再访问类目/店铺页 - URL: {product_url}"
+                                )
+                            except Exception as _clear_err:
+                                logger.warning(
+                                    f"[排名提取] clear_cookies 失败（继续尝试排名）: {_clear_err}"
+                                )
+
+                            rankings = self.dynamic_data_extractor.extract_rankings(
+                                page=page,
+                                product_url=product_url,
+                                context=context,
+                                shop_url=shop_url,
+                                category_url=category_url,
+                                task_id=task_id,
+                                db=db,
+                            )
                         ranking_elapsed = time.time() - ranking_start
                         result.update(rankings)
-                        
-                        logger.info(f"[数据提取] 排名信息提取完成 - URL: {product_url}, 排名数据: {rankings}, 耗时: {ranking_elapsed:.2f}秒")
+
+                        logger.info(
+                            f"[数据提取] 排名信息提取完成 - URL: {product_url}, 排名数据: {rankings}, 耗时: {ranking_elapsed:.2f}秒"
+                        )
                     except Exception as ranking_error:
                         ranking_elapsed = time.time() - ranking_start
-                        
+
                         # 所有从 extract_rankings 抛出的异常都应该是关键错误，因为排名提取失败意味着数据不完整
                         # 直接抛出异常，不进行任何检查，确保任务失败并触发重试
                         error_msg = str(ranking_error)
                         error_type = type(ranking_error).__name__
-                        
-                        logger.error(f"[数据提取] 排名信息提取失败（关键错误）- URL: {product_url}, 错误: {error_msg}, 错误类型: {error_type}, 耗时: {ranking_elapsed:.2f}秒")
-                        # 重新抛出异常，确保任务失败并触发重试
+
+                        logger.error(
+                            f"[数据提取] 排名信息提取失败（关键错误）- URL: {product_url}, 错误: {error_msg}, 错误类型: {error_type}, 耗时: {ranking_elapsed:.2f}秒"
+                        )
                         raise
-
-            # 通过 Istoric Preturi 接口补充上架日期（优先于页面 DOM 解析）
-            # 注意：根据 config.DISABLE_LISTED_AT 可临时整体屏蔽该步骤，后续可通过修改配置重新开启
-            if not config.DISABLE_LISTED_AT:
-                try:
-                    # 在 BitBrowser 模式下，只使用浏览器网络通道调用，避免 Python requests 在当前网络环境下反复超时
-                    if config.BITBROWSER_ENABLED:
-                        # 优先通过浏览器网络通道调用（绕过 Proxifier 对 Python 进程的代理限制）
-                        listed_at = get_listed_at_via_browser(page, product_url)
-                    else:
-                        # 非 BitBrowser 模式下，仍然可以使用 requests 直连方式
-                        listed_at = get_istoric_listed_at(product_url)
-
-                    if listed_at:
-                        if not result.get("listed_at"):
-                            result["listed_at"] = listed_at
-                            logger.info(f"[上架日期] 通过 Istoric Preturi 获取上架日期成功 - URL: {product_url}, listed_at: {listed_at.isoformat()}")
-                        else:
-                            logger.debug(
-                                f"[上架日期] 已存在 listed_at 字段，跳过 Istoric Preturi 覆盖 - URL: {product_url}, "
-                                f"existing={result.get('listed_at')}, istoric={listed_at.isoformat()}"
-                            )
-                    else:
-                        logger.debug(f"[上架日期] Istoric Preturi 未返回上架日期 - URL: {product_url}")
-                except Exception as e:
-                    # 该接口失败不影响整体验证，只记录 warning 级别日志
-                    logger.warning(f"[上架日期] 调用 Istoric Preturi 接口失败 - URL: {product_url}, 错误: {e}")
-            else:
-                logger.debug(f"[上架日期] 已根据配置 DISABLE_LISTED_AT 屏蔽 Istoric Preturi 上架日期获取 - URL: {product_url}")
             
             total_elapsed = time.time() - start_time
             logger.info(f"[爬取完成] 产品数据爬取完成 - URL: {product_url}, 总字段数: {len(result)}, 总耗时: {total_elapsed:.2f}秒")

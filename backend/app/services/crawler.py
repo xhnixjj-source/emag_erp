@@ -1,4 +1,6 @@
 """Crawler service for crawling product data with multi-threading, batch operations, and error handling"""
+from __future__ import annotations
+
 import logging
 import time
 import random

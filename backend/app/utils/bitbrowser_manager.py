@@ -444,6 +444,23 @@ class BitBrowserManager:
                             exc_info=True,
                         )
 
+    def get_ws_url(self, window_id: str) -> Optional[str]:
+        """
+        获取指定窗口当前的 CDP WebSocket 地址（ws_url）。
+
+        用法：
+        - 先调用 restart_window(window_id) 重启窗口
+        - 再调用本方法获取重启后的 ws_url，用于重新 acquire_context(cdp_url=...)
+        """
+        if not config.BITBROWSER_ENABLED or not window_id:
+            return None
+
+        with self._lock:
+            info = self._windows.get(window_id)
+            if not info:
+                return None
+            return info.ws_url
+
     # ------------------------------------------------------------------ #
     # 内部辅助方法
     # ------------------------------------------------------------------ #

@@ -1,6 +1,8 @@
 """Profit calculation API"""
+from __future__ import annotations
+
 import logging
-from typing import Optional, List
+from typing import List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
@@ -163,7 +165,7 @@ class ProfitListResponse(BaseModel):
 
 class ProfitListResponseWrapper(BaseModel):
     """Profit calculation list response wrapper"""
-    items: list[ProfitListResponse]
+    items: List[ProfitListResponse]
     total: int
     page: int
     page_size: int
@@ -197,7 +199,7 @@ def calculate_profit(
     platform_commission: float,
     vat: float,
     db: Session
-) -> tuple[float, float, float, float]:
+) -> Tuple[float, float, float, float]:
     """
     Calculate profit amount, margin, margin without VAT, and platform commission amount
     Returns: (profit_amount, profit_margin, profit_margin_without_vat, platform_commission_amount)

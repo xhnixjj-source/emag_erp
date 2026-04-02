@@ -1,4 +1,6 @@
 """Operation log middleware"""
+from __future__ import annotations
+
 from typing import Callable, Optional
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware

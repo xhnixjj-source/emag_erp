@@ -120,6 +120,8 @@ class Config:
     
     # Ranking page timeout (与主页超时对齐, 类目页实际加载常需 12-18 秒)
     RANKING_PAGE_TIMEOUT: int = int(os.getenv("RANKING_PAGE_TIMEOUT", "30000"))
+    # 类目/店铺排名页进程内缓存 TTL（秒）。过短会增加请求量；过长易复用「带个性化」的第一版列表
+    RANKING_CACHE_TTL_SECONDS: int = int(os.getenv("RANKING_CACHE_TTL_SECONDS", "120"))
     
     # Playwright configuration
     PLAYWRIGHT_BROWSER_TYPE: str = os.getenv("PLAYWRIGHT_BROWSER_TYPE", "chromium")

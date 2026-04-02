@@ -1,6 +1,6 @@
 """Authentication API"""
 from datetime import timedelta, datetime
-from typing import Optional
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -215,7 +215,7 @@ async def create_user(
     )
 
 
-@router.get("/users", response_model=list[UserResponse])
+@router.get("/users", response_model=List[UserResponse])
 async def list_users(
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db),

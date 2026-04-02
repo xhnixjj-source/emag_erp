@@ -2,6 +2,8 @@
 
 提供线程安全的浏览器上下文池，支持上下文复用、健康检查、资源管理
 """
+from __future__ import annotations
+
 import logging
 import threading
 import time
