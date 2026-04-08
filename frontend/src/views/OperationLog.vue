@@ -202,7 +202,8 @@ const operationTypeMap = {
   monitor_scheduled: '定时监控',
   monitor_trigger: '触发监控',
   monitor_trigger_batch: '批量触发监控',
-  task_retry: '任务重试'
+  task_retry: '任务重试',
+  keyword_link_csv_import: '链接初筛CSV导入'
 }
 
 // 目标类型映射
@@ -243,7 +244,8 @@ const getOperationTypeTagType = (type) => {
     product_unlock: 'success',
     user_create: 'success',
     user_update: 'primary',
-    user_delete: 'danger'
+    user_delete: 'danger',
+    keyword_link_csv_import: 'primary'
   }
   return typeMap[type] || ''
 }

@@ -25,6 +25,9 @@ export const keywordsApi = {
   
   // Chrome 插件提交链接
   importChromeExtensionLinks: (items) => api.post('/keywords/links/chrome-extension', { items }),
+
+  // 链接初筛：按 CSV 模板导入（body: { keyword_id, rows }）
+  importKeywordLinksFromCsv: (body) => api.post('/keywords/links/import', body),
   
   // Get tasks (supports filtering by keyword_id, status, etc.)
   getTasks: (params = {}) => api.get('/keywords/tasks', { params }),

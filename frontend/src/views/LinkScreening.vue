@@ -4,13 +4,13 @@
       <template #header>
         <div class="card-header">
           <span>链接初筛</span>
-          <div>
+          <div class="card-header-actions">
+            <el-button @click="showImportDialog = true">按模板导入链接</el-button>
             <el-button 
               type="primary" 
               :disabled="selectedLinks.length === 0"
               @click="handleBatchCrawl"
               :loading="batchCrawling"
-              style="margin-right: 10px"
             >
               批量爬取 (已选择 {{ selectedLinks.length }} 个)
             </el-button>
@@ -59,6 +59,7 @@
               >
                 <el-option label="关键字搜索" value="keyword_search" />
                 <el-option label="Chrome 插件" value="chrome_extension" />
+                <el-option label="CSV 模板导入" value="csv_import" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -336,17 +337,191 @@
         style="margin-top: 20px; flex-shrink: 0;"
       />
     </el-card>
+
+    <el-dialog
+      v-model="showImportDialog"
+      title="按模板导入链接"
+      width="560px"
+      destroy-on-close
+      @closed="resetImportDialog"
+    >
+      <p class="import-hint">
+        请先下载 CSV 模板，按表头填写（勿改表头名与列顺序）；<code>product_url</code> 必填，其余可留空。
+        单次最多 3000 行。导入后来源为「CSV 模板导入」，可在筛选中选择查看。
+      </p>
+      <el-form label-width="100px">
+        <el-form-item label="目标关键字" required>
+          <el-select
+            v-model="importKeywordId"
+            placeholder="选择要归入的关键字"
+            filterable
+            clearable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="kw in keywords"
+              :key="kw.id"
+              :label="kw.keyword"
+              :value="kw.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="模板">
+          <el-button type="primary" link @click="downloadImportTemplate">下载 CSV 模板</el-button>
+        </el-form-item>
+        <el-form-item label="上传文件" required>
+          <input
+            ref="importFileInputRef"
+            type="file"
+            accept=".csv,text/csv"
+            @change="onImportFileChange"
+          />
+          <span v-if="importFileName" class="import-file-name">{{ importFileName }}</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showImportDialog = false">取消</el-button>
+        <el-button type="primary" :loading="importing" :disabled="!importKeywordId || !importParsedRows.length" @click="submitImport">
+          导入
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { keywordsApi } from '@/api/keywords'
 import { ElMessage, ElMessageBox } from 'element-plus'
+
+/** 与后端 KeywordLinkImportRow / 下载模板一致，勿改顺序 */
+const CSV_TEMPLATE_HEADERS = [
+  'product_url',
+  'pnk',
+  'product_title',
+  'brand',
+  'category',
+  'min_price',
+  'offer_count',
+  'purchase_price',
+  'commission_rate',
+  'last_offer_period',
+  'tag'
+]
+
+function parseCsvLine(line) {
+  const out = []
+  let cur = ''
+  let inQ = false
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (c === '"') {
+      if (inQ && line[i + 1] === '"') {
+        cur += '"'
+        i++
+      } else {
+        inQ = !inQ
+      }
+    } else if (c === ',' && !inQ) {
+      out.push(cur.trim())
+      cur = ''
+    } else {
+      cur += c
+    }
+  }
+  out.push(cur.trim())
+  return out.map((cell) => cell.replace(/^"|"$/g, ''))
+}
+
+function parseImportCsvText(text) {
+  const raw = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const lines = raw.split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0)
+  if (lines.length < 2) {
+    throw new Error('文件至少需包含表头行与一行数据（可删除模板中的示例行后粘贴自己的链接）')
+  }
+  const headerCells = parseCsvLine(lines[0])
+  if (headerCells.length !== CSV_TEMPLATE_HEADERS.length) {
+    throw new Error(
+      `表头列数不正确，请使用「下载 CSV 模板」，保持 ${CSV_TEMPLATE_HEADERS.length} 列且顺序不变`
+    )
+  }
+  for (let i = 0; i < CSV_TEMPLATE_HEADERS.length; i++) {
+    if (headerCells[i].trim().toLowerCase() !== CSV_TEMPLATE_HEADERS[i]) {
+      throw new Error(`表头第 ${i + 1} 列应为 "${CSV_TEMPLATE_HEADERS[i]}"，请勿修改表头`)
+    }
+  }
+  const rows = []
+  for (let li = 1; li < lines.length; li++) {
+    let cells = parseCsvLine(lines[li])
+    while (cells.length < CSV_TEMPLATE_HEADERS.length) cells.push('')
+    if (cells.length > CSV_TEMPLATE_HEADERS.length) {
+      cells = cells.slice(0, CSV_TEMPLATE_HEADERS.length)
+    }
+    const obj = {}
+    CSV_TEMPLATE_HEADERS.forEach((key, idx) => {
+      obj[key] = cells[idx] != null ? String(cells[idx]).trim() : ''
+    })
+    if (!obj.product_url) continue
+    rows.push(obj)
+  }
+  if (rows.length > 3000) {
+    throw new Error('超过 3000 行，请分批导入')
+  }
+  if (rows.length === 0) {
+    throw new Error('没有有效的数据行（product_url 不能为空）')
+  }
+  return rows
+}
+
+function mapCsvRowToApiPayload(r) {
+  const parseOptFloat = (v) => {
+    if (v === '' || v == null) return undefined
+    const n = Number(String(v).replace(',', '.'))
+    return Number.isFinite(n) ? n : undefined
+  }
+  const parseOptInt = (v) => {
+    if (v === '' || v == null) return undefined
+    const n = parseInt(String(v).trim(), 10)
+    return Number.isFinite(n) ? n : undefined
+  }
+  const s = (v) => {
+    if (v === '' || v == null) return undefined
+    const t = String(v).trim()
+    return t || undefined
+  }
+  const row = { product_url: r.product_url.trim() }
+  const pnk = s(r.pnk)
+  if (pnk) row.pnk = pnk
+  const pt = s(r.product_title)
+  if (pt) row.product_title = pt
+  const br = s(r.brand)
+  if (br) row.brand = br
+  const cat = s(r.category)
+  if (cat) row.category = cat
+  const mp = parseOptFloat(r.min_price)
+  if (mp !== undefined) row.min_price = mp
+  const oc = parseOptInt(r.offer_count)
+  if (oc !== undefined) row.offer_count = oc
+  const pp = parseOptFloat(r.purchase_price)
+  if (pp !== undefined) row.purchase_price = pp
+  const cr = parseOptFloat(r.commission_rate)
+  if (cr !== undefined) row.commission_rate = cr
+  const lop = s(r.last_offer_period)
+  if (lop) row.last_offer_period = lop
+  const tg = s(r.tag)
+  if (tg) row.tag = tg
+  return row
+}
 
 const loading = ref(false)
 const batchCrawling = ref(false)
 const batchGettingListedAt = ref(false)
+const showImportDialog = ref(false)
+const importKeywordId = ref(null)
+const importFileInputRef = ref(null)
+const importFileName = ref('')
+const importParsedRows = ref([])
+const importing = ref(false)
 const links = ref([])
 const keywords = ref([])
 const brands = ref([])
@@ -381,6 +556,86 @@ const loadKeywords = async () => {
     keywords.value = response.data || response
   } catch (error) {
     ElMessage.error('加载关键字列表失败')
+  }
+}
+
+watch(showImportDialog, (open) => {
+  if (open) {
+    importKeywordId.value = selectedKeywordId.value ?? null
+  }
+})
+
+function downloadImportTemplate() {
+  const header = CSV_TEMPLATE_HEADERS.join(',')
+  const example =
+    'https://www.emag.ro/inlocuiti-cu-linkul-dvs-pd/pd/EXEMPLU/,,,,,,,,,,'
+  const csv = `\ufeff${header}\n${example}\n`
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = 'link_screening_import_template.csv'
+  a.click()
+  URL.revokeObjectURL(a.href)
+  ElMessage.success('模板已下载')
+}
+
+function resetImportDialog() {
+  importFileName.value = ''
+  importParsedRows.value = []
+  if (importFileInputRef.value) {
+    importFileInputRef.value.value = ''
+  }
+}
+
+function onImportFileChange(e) {
+  importParsedRows.value = []
+  importFileName.value = ''
+  const file = e.target?.files?.[0]
+  if (!file) return
+  importFileName.value = file.name
+  const reader = new FileReader()
+  reader.onload = () => {
+    try {
+      const text = String(reader.result || '')
+      importParsedRows.value = parseImportCsvText(text)
+      ElMessage.success(`已解析 ${importParsedRows.value.length} 条有效链接`)
+    } catch (err) {
+      importParsedRows.value = []
+      ElMessage.error(err.message || 'CSV 解析失败')
+    }
+  }
+  reader.onerror = () => {
+    ElMessage.error('读取文件失败')
+  }
+  reader.readAsText(file, 'UTF-8')
+}
+
+async function submitImport() {
+  if (!importKeywordId.value) {
+    ElMessage.warning('请选择目标关键字')
+    return
+  }
+  if (!importParsedRows.value.length) {
+    ElMessage.warning('请先选择有效的 CSV 文件')
+    return
+  }
+  importing.value = true
+  try {
+    const rows = importParsedRows.value.map((r) => mapCsvRowToApiPayload(r))
+    const res = await keywordsApi.importKeywordLinksFromCsv({
+      keyword_id: importKeywordId.value,
+      rows
+    })
+    ElMessage.success(res.message || `导入完成：新增 ${res.created_count ?? 0} 条`)
+    showImportDialog.value = false
+    selectedKeywordId.value = importKeywordId.value
+    filters.source = 'csv_import'
+    page.value = 1
+    await loadLinks()
+  } catch {
+    // axios 拦截器已提示错误
+  } finally {
+    importing.value = false
   }
 }
 
@@ -683,6 +938,33 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+}
+
+.card-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.import-hint {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.6;
+}
+
+.import-hint code {
+  padding: 0 4px;
+  font-size: 12px;
+  background: #f4f4f5;
+  border-radius: 3px;
+}
+
+.import-file-name {
+  margin-left: 8px;
+  font-size: 13px;
+  color: #909399;
 }
 </style>
 

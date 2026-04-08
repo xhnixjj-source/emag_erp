@@ -88,6 +88,37 @@ class ChromeExtensionLinksRequest(BaseModel):
     """Chrome 插件提交链接请求 - 支持单条或批量"""
     items: List[ChromeExtensionLinkItem]
 
+
+class KeywordLinkImportRow(BaseModel):
+    """链接初筛 CSV 模板单行（与模板表头一致）"""
+    product_url: str
+    pnk: Optional[str] = None
+    product_title: Optional[str] = None
+    brand: Optional[str] = None
+    category: Optional[str] = None
+    min_price: Optional[float] = None
+    offer_count: Optional[int] = None
+    purchase_price: Optional[float] = None
+    commission_rate: Optional[float] = None
+    last_offer_period: Optional[str] = None
+    tag: Optional[str] = None
+
+
+class KeywordLinkImportRequest(BaseModel):
+    keyword_id: int
+    rows: List[KeywordLinkImportRow]
+
+
+_KEYWORD_LINK_IMPORT_MAX_ROWS = 3000
+
+
+def _is_plausible_emag_product_url(url: str) -> bool:
+    u = (url or "").strip().lower()
+    if not u.startswith(("http://", "https://")):
+        return False
+    return "emag" in u
+
+
 class TaskResponse(BaseModel):
     """Task response model"""
     id: int
@@ -604,6 +635,120 @@ async def import_chrome_extension_links(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"导入失败: {str(e)}"
+        )
+
+
+@router.post("/links/import")
+async def import_keyword_links_from_template(
+    request: KeywordLinkImportRequest,
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """
+    按「链接初筛」CSV 模板批量导入 keyword_links（需登录）。
+    - 关键字必须属于当前用户
+    - product_url 全局去重（已存在则跳过）
+    - source 标记为 csv_import
+    """
+    if len(request.rows) > _KEYWORD_LINK_IMPORT_MAX_ROWS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"单次最多导入 {_KEYWORD_LINK_IMPORT_MAX_ROWS} 行，当前 {len(request.rows)} 行",
+        )
+
+    keyword = (
+        db.query(Keyword)
+        .filter(
+            Keyword.id == request.keyword_id,
+            Keyword.created_by_user_id == current_user["id"],
+        )
+        .first()
+    )
+    if not keyword:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="关键字不存在或无权操作",
+        )
+
+    created_count = 0
+    skipped_count = 0
+    invalid_count = 0
+
+    try:
+        for row in request.rows:
+            url = (row.product_url or "").strip()
+            if not url or not _is_plausible_emag_product_url(url):
+                invalid_count += 1
+                continue
+
+            existing_link = (
+                db.query(KeywordLink)
+                .filter(KeywordLink.product_url == url)
+                .first()
+            )
+            if existing_link:
+                skipped_count += 1
+                continue
+
+            def _empty_to_none(s: Optional[str]) -> Optional[str]:
+                if s is None:
+                    return None
+                t = str(s).strip()
+                return t if t else None
+
+            link = KeywordLink(
+                keyword_id=keyword.id,
+                product_url=url,
+                pnk_code=_empty_to_none(row.pnk),
+                product_title=_empty_to_none(row.product_title),
+                brand=_empty_to_none(row.brand),
+                category=_empty_to_none(row.category),
+                commission_rate=row.commission_rate,
+                offer_count=row.offer_count,
+                purchase_price=row.purchase_price,
+                price=row.min_price,
+                last_offer_period=_empty_to_none(row.last_offer_period),
+                tag=_empty_to_none(row.tag),
+                source="csv_import",
+                status="active",
+                listed_at_status="pending",
+            )
+            db.add(link)
+            created_count += 1
+
+        db.commit()
+
+        create_operation_log(
+            db=db,
+            user_id=current_user["id"],
+            operation_type="keyword_link_csv_import",
+            target_type="keyword",
+            target_id=keyword.id,
+            operation_detail={
+                "keyword_id": keyword.id,
+                "created_count": created_count,
+                "skipped_count": skipped_count,
+                "invalid_count": invalid_count,
+                "total_rows": len(request.rows),
+            },
+        )
+
+        return {
+            "success": True,
+            "created_count": created_count,
+            "skipped_count": skipped_count,
+            "invalid_count": invalid_count,
+            "message": f"成功导入 {created_count} 条，跳过已存在 {skipped_count} 条，无效行 {invalid_count} 条",
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[CSV导入] 失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"导入失败: {str(e)}",
         )
 
 
