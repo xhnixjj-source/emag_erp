@@ -346,7 +346,8 @@
       @closed="resetImportDialog"
     >
       <p class="import-hint">
-        请先下载 CSV 模板，按表头填写（勿改表头名与列顺序）；<code>product_url</code> 必填，其余可留空。
+        请先下载 CSV 模板，按表头填写（勿改表头名与列顺序）；<code>product_url</code> 必填；
+        <code>thumbnail_image</code> 为缩略图地址，可选；其余可留空。
         单次最多 3000 行。导入后来源为「CSV 模板导入」，可在筛选中选择查看。
       </p>
       <el-form label-width="100px">
@@ -397,6 +398,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 /** 与后端 KeywordLinkImportRow / 下载模板一致，勿改顺序 */
 const CSV_TEMPLATE_HEADERS = [
   'product_url',
+  'thumbnail_image',
   'pnk',
   'product_title',
   'brand',
@@ -490,6 +492,8 @@ function mapCsvRowToApiPayload(r) {
     return t || undefined
   }
   const row = { product_url: r.product_url.trim() }
+  const thumb = s(r.thumbnail_image)
+  if (thumb) row.thumbnail_image = thumb
   const pnk = s(r.pnk)
   if (pnk) row.pnk = pnk
   const pt = s(r.product_title)
@@ -568,7 +572,7 @@ watch(showImportDialog, (open) => {
 function downloadImportTemplate() {
   const header = CSV_TEMPLATE_HEADERS.join(',')
   const example =
-    'https://www.emag.ro/inlocuiti-cu-linkul-dvs-pd/pd/EXEMPLU/,,,,,,,,,,'
+    'https://www.emag.ro/inlocuiti-cu-linkul-dvs-pd/pd/EXEMPLU/,,,,,,,,,,,'
   const csv = `\ufeff${header}\n${example}\n`
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
   const a = document.createElement('a')

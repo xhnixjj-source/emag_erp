@@ -92,6 +92,7 @@ class ChromeExtensionLinksRequest(BaseModel):
 class KeywordLinkImportRow(BaseModel):
     """链接初筛 CSV 模板单行（与模板表头一致）"""
     product_url: str
+    thumbnail_image: Optional[str] = None  # 缩略图 URL（对应 keyword_links.thumbnail_image）
     pnk: Optional[str] = None
     product_title: Optional[str] = None
     brand: Optional[str] = None
@@ -699,6 +700,7 @@ async def import_keyword_links_from_template(
             link = KeywordLink(
                 keyword_id=keyword.id,
                 product_url=url,
+                thumbnail_image=_empty_to_none(row.thumbnail_image),
                 pnk_code=_empty_to_none(row.pnk),
                 product_title=_empty_to_none(row.product_title),
                 brand=_empty_to_none(row.brand),
