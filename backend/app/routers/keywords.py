@@ -110,7 +110,8 @@ class KeywordLinkImportRequest(BaseModel):
     rows: List[KeywordLinkImportRow]
 
 
-_KEYWORD_LINK_IMPORT_MAX_ROWS = 3000
+_KEYWORD_LINK_IMPORT_MAX_ROWS = 10000
+_KEYWORD_LINK_IMPORT_COMMIT_BATCH_SIZE = 1000
 
 
 def _is_plausible_emag_product_url(url: str) -> bool:
@@ -292,6 +293,21 @@ async def get_brands(
     
     return {"brands": brand_list}
 
+
+@router.get("/categories")
+async def get_categories(
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """Get distinct categories from keyword links"""
+    from sqlalchemy import distinct
+    categories = db.query(distinct(KeywordLink.category)).filter(
+        KeywordLink.category.isnot(None),
+        KeywordLink.category != ""
+    ).order_by(KeywordLink.category).all()
+    category_list = [c[0] for c in categories if c[0]]
+    return {"categories": category_list}
+
 @router.get("/links")
 async def get_keyword_links(
     keyword_id: Optional[int] = None,
@@ -310,6 +326,7 @@ async def get_keyword_links(
     crawled_at_start: Optional[str] = None,
     crawled_at_end: Optional[str] = None,
     source: Optional[str] = None,
+    category: Optional[str] = None,
     tag: Optional[str] = None,
     offer_count_min: Optional[int] = None,
     offer_count_max: Optional[int] = None,
@@ -349,6 +366,8 @@ async def get_keyword_links(
             query = query.filter(KeywordLink.rating <= rating_max)
         if source:
             query = query.filter(KeywordLink.source == source)
+        if category:
+            query = query.filter(KeywordLink.category == category)
         if tag:
             query = query.filter(KeywordLink.tag == tag)
         if crawled_at_start:
@@ -676,6 +695,7 @@ async def import_keyword_links_from_template(
     invalid_count = 0
 
     try:
+        pending_inserts = 0
         for row in request.rows:
             url = (row.product_url or "").strip()
             if not url or not _is_plausible_emag_product_url(url):
@@ -717,8 +737,15 @@ async def import_keyword_links_from_template(
             )
             db.add(link)
             created_count += 1
+            pending_inserts += 1
 
-        db.commit()
+            # 低风险方案：大批量导入按批次提交，降低单事务锁时间与回滚成本
+            if pending_inserts >= _KEYWORD_LINK_IMPORT_COMMIT_BATCH_SIZE:
+                db.commit()
+                pending_inserts = 0
+
+        if pending_inserts > 0:
+            db.commit()
 
         create_operation_log(
             db=db,

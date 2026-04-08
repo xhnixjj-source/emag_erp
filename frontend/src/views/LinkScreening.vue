@@ -64,6 +64,25 @@
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
+            <el-form-item label="类目">
+              <el-select
+                v-model="filters.category"
+                placeholder="全部类目"
+                clearable
+                filterable
+                @change="loadLinks"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="cat in categories"
+                  :key="cat"
+                  :label="cat"
+                  :value="cat"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="4">
             <el-form-item label="标签">
               <el-select
                 v-model="filters.tag"
@@ -348,7 +367,7 @@
       <p class="import-hint">
         请先下载 CSV 模板，按表头填写（勿改表头名与列顺序）；<code>product_url</code> 必填；
         <code>thumbnail_image</code> 为缩略图地址，可选；其余可留空。
-        单次最多 3000 行。导入后来源为「CSV 模板导入」，可在筛选中选择查看。
+        单次最多 10000 行。导入后来源为「CSV 模板导入」，可在筛选中选择查看。
       </p>
       <el-form label-width="100px">
         <el-form-item label="目标关键字" required>
@@ -466,8 +485,8 @@ function parseImportCsvText(text) {
     if (!obj.product_url) continue
     rows.push(obj)
   }
-  if (rows.length > 3000) {
-    throw new Error('超过 3000 行，请分批导入')
+  if (rows.length > 10000) {
+    throw new Error('超过 10000 行，请分批导入')
   }
   if (rows.length === 0) {
     throw new Error('没有有效的数据行（product_url 不能为空）')
@@ -529,6 +548,7 @@ const importing = ref(false)
 const links = ref([])
 const keywords = ref([])
 const brands = ref([])
+const categories = ref([])
 const selectedLinks = ref([])
 const selectAll = ref(false)
 const selectedKeywordId = ref(null)
@@ -547,6 +567,7 @@ const filters = reactive({
   rating_max: null,
   crawled_at_range: null,
   source: null,
+  category: null,
   tag: null,
   offer_count_min: null,
   offer_count_max: null,
@@ -652,6 +673,15 @@ const loadBrands = async () => {
   }
 }
 
+const loadCategories = async () => {
+  try {
+    const response = await keywordsApi.getCategories()
+    categories.value = response.data?.categories || response.categories || []
+  } catch (error) {
+    ElMessage.error('加载类目列表失败')
+  }
+}
+
 const loadLinks = async () => {
   loading.value = true
   try {
@@ -674,6 +704,9 @@ const loadLinks = async () => {
     // 处理来源和标签筛选
     if (filters.source) {
       params.source = filters.source
+    }
+    if (filters.category) {
+      params.category = filters.category
     }
     if (filters.tag) {
       params.tag = filters.tag
@@ -756,6 +789,7 @@ const resetFilters = () => {
   filters.rating_max = null
   filters.crawled_at_range = null
   filters.source = null
+  filters.category = null
   filters.tag = null
   filters.offer_count_min = null
   filters.offer_count_max = null
@@ -900,6 +934,7 @@ const handleBatchGetListedAt = async () => {
 
 onMounted(() => {
   loadKeywords()
+  loadCategories()
   // 页面加载时自动加载所有链接
   loadLinks()
 })

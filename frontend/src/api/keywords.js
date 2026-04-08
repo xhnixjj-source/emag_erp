@@ -12,6 +12,8 @@ export const keywordsApi = {
   
   // Get brands list
   getBrands: () => api.get('/keywords/brands'),
+  // Get categories list
+  getCategories: () => api.get('/keywords/categories'),
   
   // Get keyword links (using /links endpoint with keyword_id param)
   getKeywordLinks: (keywordId, params = {}) => {
@@ -27,7 +29,8 @@ export const keywordsApi = {
   importChromeExtensionLinks: (items) => api.post('/keywords/links/chrome-extension', { items }),
 
   // 链接初筛：按 CSV 模板导入（body: { keyword_id, rows }）
-  importKeywordLinksFromCsv: (body) => api.post('/keywords/links/import', body),
+  // 低风险方案：仅该接口提升超时，避免 1w 行导入在 30s 超时
+  importKeywordLinksFromCsv: (body) => api.post('/keywords/links/import', body, { timeout: 120000 }),
   
   // Get tasks (supports filtering by keyword_id, status, etc.)
   getTasks: (params = {}) => api.get('/keywords/tasks', { params }),
