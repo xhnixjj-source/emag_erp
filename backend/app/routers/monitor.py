@@ -45,6 +45,7 @@ class MonitorPoolResponse(BaseModel):
     category_rank: Optional[int] = None
     ad_rank: Optional[int] = None
     is_own_shop: bool = False
+    has_history: bool = False
 
     class Config:
         from_attributes = True
@@ -80,8 +81,11 @@ class MonitorImportTxtResponse(BaseModel):
 
 @router.get("", response_model=MonitorPoolListResponse)
 async def get_monitor_pool(
-    status: Optional[str] = None,
     is_own_shop: Optional[bool] = Query(None, description="筛选：是否自有店铺监控"),
+    list_scope: str = Query(
+        "active",
+        description="列表范围：active=监控中（默认）；removed=已移除监控，可查看保留的历史",
+    ),
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db),
     skip: int = 0,
@@ -95,39 +99,30 @@ async def get_monitor_pool(
     if page is not None and page_size is not None:
         skip = (page - 1) * page_size
         limit = page_size
-    
-    # 只显示 ACTIVE 状态的监控项，并且未进入利润测算的
+
+    scope = (list_scope or "active").strip().lower()
+    if scope not in ("active", "removed"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="list_scope must be 'active' or 'removed'",
+        )
+
     from app.models.listing import ListingPool
-    
-    # 获取所有已进入 listing pool 的 monitor_pool_id
+
     listing_monitor_ids = db.query(ListingPool.monitor_pool_id).filter(
         ListingPool.monitor_pool_id.isnot(None)
     ).distinct().all()
     listing_monitor_ids = [lid[0] for lid in listing_monitor_ids]
-    
-    query = db.query(MonitorPool).filter(
-        MonitorPool.status == MonitorStatus.ACTIVE  # 只显示 ACTIVE 状态的
-    )
+
+    if scope == "removed":
+        query = db.query(MonitorPool).filter(MonitorPool.status == MonitorStatus.INACTIVE)
+    else:
+        query = db.query(MonitorPool).filter(MonitorPool.status == MonitorStatus.ACTIVE)
+        if listing_monitor_ids:
+            query = query.filter(~MonitorPool.id.in_(listing_monitor_ids))
 
     if is_own_shop is not None:
         query = query.filter(MonitorPool.is_own_shop == is_own_shop)
-    
-    # 排除已进入利润测算的监控项
-    if listing_monitor_ids:
-        query = query.filter(~MonitorPool.id.in_(listing_monitor_ids))
-    
-    if status:
-        try:
-            monitor_status = MonitorStatus(status)
-            # 如果指定了 status，但我们已经过滤了 ACTIVE，这里可以忽略或验证
-            if monitor_status != MonitorStatus.ACTIVE:
-                # 如果请求的是非 ACTIVE 状态，返回空结果
-                query = query.filter(False)  # 强制返回空
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid status: {status}"
-            )
     
     # 获取总数
     total = query.count()
@@ -198,6 +193,7 @@ async def get_monitor_pool(
             "category_rank": latest_history.category_rank if latest_history else (fp.category_rank if fp else None),
             "ad_rank": latest_history.ad_rank if latest_history else (fp.ad_rank if fp else None),
             "is_own_shop": bool(monitor.is_own_shop),
+            "has_history": latest_history is not None,
         }
         converted_monitors.append(MonitorPoolResponse(**monitor_dict))
     
@@ -248,18 +244,37 @@ async def import_monitor_from_txt(
             detail="文件中没有有效链接",
         )
 
-    existing_rows = db.query(MonitorPool.product_url).filter(
+    existing_mons = db.query(MonitorPool).filter(
         MonitorPool.product_url.in_(ordered)
     ).all()
-    existing_urls = {r[0] for r in existing_rows}
+    url_to_monitor = {}
+    for m in existing_mons:
+        if m.product_url not in url_to_monitor:
+            url_to_monitor[m.product_url] = m
 
     created = 0
     skipped_duplicate = 0
     queued_tasks = 0
 
     for url in ordered:
-        if url in existing_urls:
-            skipped_duplicate += 1
+        existing = url_to_monitor.get(url)
+        if existing:
+            if existing.status == MonitorStatus.ACTIVE:
+                skipped_duplicate += 1
+                continue
+            existing.status = MonitorStatus.ACTIVE
+            existing.is_own_shop = is_own_shop
+            db.flush()
+            task_manager.add_task(
+                task_type=TaskType.PRODUCT_CRAWL,
+                user_id=current_user["id"],
+                priority=TaskPriority.NORMAL,
+                product_url=url,
+                monitor_pool_id=existing.id,
+                db=db,
+            )
+            created += 1
+            queued_tasks += 1
             continue
         monitor = MonitorPool(
             product_url=url,
@@ -269,6 +284,7 @@ async def import_monitor_from_txt(
         )
         db.add(monitor)
         db.flush()
+        url_to_monitor[url] = monitor
         task_manager.add_task(
             task_type=TaskType.PRODUCT_CRAWL,
             user_id=current_user["id"],
@@ -277,7 +293,6 @@ async def import_monitor_from_txt(
             monitor_pool_id=monitor.id,
             db=db,
         )
-        existing_urls.add(url)
         created += 1
         queued_tasks += 1
 
@@ -591,17 +606,49 @@ async def add_to_monitor_pool(
             detail="product_url is required"
         )
     
-    # Check if already exists（全局按 URL 去重）
     existing = db.query(MonitorPool).filter(
         MonitorPool.product_url == product_url
     ).first()
-    
+
     if existing:
+        if existing.status == MonitorStatus.INACTIVE:
+            existing.status = MonitorStatus.ACTIVE
+            db.commit()
+            db.refresh(existing)
+            has_hist = (
+                db.query(MonitorHistory.id)
+                .filter(MonitorHistory.monitor_pool_id == existing.id)
+                .first()
+                is not None
+            )
+            monitor_dict = {
+                "id": existing.id,
+                "filter_pool_id": existing.filter_pool_id,
+                "product_url": existing.product_url,
+                "status": existing.status.value
+                if hasattr(existing.status, "value")
+                else str(existing.status),
+                "created_by_user_id": existing.created_by_user_id,
+                "last_monitored_at": existing.last_monitored_at.isoformat()
+                if existing.last_monitored_at
+                and isinstance(existing.last_monitored_at, datetime)
+                else (
+                    str(existing.last_monitored_at)
+                    if existing.last_monitored_at
+                    else None
+                ),
+                "created_at": existing.created_at.isoformat()
+                if existing.created_at and isinstance(existing.created_at, datetime)
+                else (str(existing.created_at) if existing.created_at else ""),
+                "is_own_shop": bool(existing.is_own_shop),
+                "has_history": has_hist,
+            }
+            return MonitorPoolResponse(**monitor_dict)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Product already in monitor pool"
         )
-    
+
     monitor = MonitorPool(
         product_url=product_url,
         created_by_user_id=current_user["id"],
@@ -632,9 +679,15 @@ async def add_to_monitor_pool(
         "last_monitored_at": monitor.last_monitored_at.isoformat() if monitor.last_monitored_at and isinstance(monitor.last_monitored_at, datetime) else (str(monitor.last_monitored_at) if monitor.last_monitored_at else None),
         "created_at": monitor.created_at.isoformat() if monitor.created_at and isinstance(monitor.created_at, datetime) else (str(monitor.created_at) if monitor.created_at else ""),
         "is_own_shop": bool(monitor.is_own_shop),
+        "has_history": False,
     }
     
     return MonitorPoolResponse(**monitor_dict)
+
+class BatchInactivateRequest(BaseModel):
+    """批量停止监控（软删除，保留历史）"""
+    monitor_ids: List[int]
+
 
 @router.delete("/{monitor_id}", response_model=dict)
 async def remove_from_monitor_pool(
@@ -642,28 +695,72 @@ async def remove_from_monitor_pool(
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
-    """Remove product from monitor pool"""
+    """从监控池移除：设为 INACTIVE，保留监控历史"""
     monitor = db.query(MonitorPool).filter(MonitorPool.id == monitor_id).first()
     if not monitor:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Monitor not found"
         )
-    
-    # Log operation
+
+    if monitor.status == MonitorStatus.INACTIVE:
+        return {"message": "Monitor already inactive", "status": "inactive"}
+
+    monitor.status = MonitorStatus.INACTIVE
+    db.commit()
+
     create_operation_log(
         db=db,
         user_id=current_user["id"],
         operation_type="monitor_remove",
         target_type="monitor_pool",
         target_id=monitor_id,
-        operation_detail={"product_url": monitor.product_url}
+        operation_detail={"product_url": monitor.product_url, "soft": True},
     )
-    
-    db.delete(monitor)
+
+    return {"message": "Monitor removed successfully", "status": "inactive"}
+
+
+@router.post("/batch-inactivate", response_model=dict)
+async def batch_inactivate_monitors(
+    body: BatchInactivateRequest,
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """批量停止监控（软删除），保留历史"""
+    ids = list({i for i in (body.monitor_ids or []) if i})
+    if not ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="monitor_ids is required",
+        )
+
+    monitors = db.query(MonitorPool).filter(MonitorPool.id.in_(ids)).all()
+    inactivated = 0
+    skipped = 0
+    for m in monitors:
+        if m.status == MonitorStatus.INACTIVE:
+            skipped += 1
+            continue
+        m.status = MonitorStatus.INACTIVE
+        inactivated += 1
+        create_operation_log(
+            db=db,
+            user_id=current_user["id"],
+            operation_type="monitor_remove",
+            target_type="monitor_pool",
+            target_id=m.id,
+            operation_detail={"product_url": m.product_url, "soft": True, "batch": True},
+        )
+
+    skipped += len(ids) - len(monitors)
     db.commit()
-    
-    return {"message": "Monitor removed successfully"}
+
+    return {
+        "message": f"已停止 {inactivated} 条监控",
+        "inactivated": inactivated,
+        "skipped": skipped,
+    }
 
 class TriggerMonitorRequest(BaseModel):
     """Trigger monitor request model"""

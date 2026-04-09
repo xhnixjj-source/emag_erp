@@ -15,6 +15,8 @@ export const monitorPoolApi = {
   },
   addProduct: (productUrl) => api.post('/monitor-pool', { product_url: productUrl }),
   removeProduct: (id) => api.delete(`/monitor-pool/${id}`),
+  batchInactivate: (monitorIds) =>
+    api.post('/monitor-pool/batch-inactivate', { monitor_ids: monitorIds }),
   getHistory: (productId, params) => api.get(`/monitor-pool/${productId}/history`, { params }),
   getScheduleConfig: () => api.get('/monitor-pool/schedule'),
   updateScheduleConfig: (config) => api.put('/monitor-pool/schedule', config),

@@ -149,7 +149,17 @@
         height="calc(100vh - 450px)"
       >
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="id" label="ID" width="80" />
+        <el-table-column label="ID" width="88">
+          <template #default="{ row }">
+            <a
+              v-if="row.has_monitor_history && row.monitor_pool_id_for_history"
+              href="#"
+              class="id-history-link"
+              @click.prevent="openMonitorHistory(row.monitor_pool_id_for_history)"
+            >{{ row.id }}</a>
+            <span v-else>{{ row.id }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="缩略图" width="100">
           <template #default="{ row }">
             <el-image
@@ -234,12 +244,44 @@
         style="margin-top: 20px; flex-shrink: 0;"
       />
     </el-card>
+
+    <el-dialog v-model="showHistoryDialog" title="监控历史" width="80%">
+      <el-table :data="historyData" v-loading="historyLoading" style="width: 100%">
+        <el-table-column prop="monitored_at" label="监控时间" width="180">
+          <template #default="{ row }">
+            {{ formatDateTime(row.monitored_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="price" label="价格" width="100">
+          <template #default="{ row }">
+            {{ row.price ? `€${row.price}` : '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="stock" label="库存" width="100">
+          <template #default="{ row }">
+            <span :style="{ color: row.stock > 0 ? '#67c23a' : '#f56c6c' }">
+              {{ row.stock !== null && row.stock !== undefined ? row.stock : '-' }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="review_count" label="评论数" width="100" />
+        <el-table-column prop="rating" label="评分" width="100">
+          <template #default="{ row }">
+            {{ row.rating !== null && row.rating !== undefined ? row.rating.toFixed(2) : '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="shop_rank" label="店铺排名" width="120" />
+        <el-table-column prop="category_rank" label="类目排名" width="120" />
+        <el-table-column prop="ad_rank" label="广告排名" width="120" />
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { filterPoolApi } from '@/api/filterPool'
+import { monitorPoolApi } from '@/api/monitorPool'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const loading = ref(false)
@@ -252,6 +294,11 @@ const shops = ref([])
 const page = ref(1)
 const pageSize = ref(100)
 const total = ref(0)
+
+const showHistoryDialog = ref(false)
+const historyData = ref([])
+const historyLoading = ref(false)
+const historyMonitorId = ref(null)
 
 const filters = reactive({
   price_min: null,
@@ -489,6 +536,30 @@ const handleExport = async () => {
   }
 }
 
+const openMonitorHistory = (monitorPoolId) => {
+  historyMonitorId.value = monitorPoolId
+  showHistoryDialog.value = true
+}
+
+const loadMonitorHistory = async () => {
+  if (!historyMonitorId.value) return
+  historyLoading.value = true
+  try {
+    const response = await monitorPoolApi.getHistory(historyMonitorId.value, { limit: 100 })
+    historyData.value = (response.data || response || []).reverse()
+  } catch (error) {
+    ElMessage.error('加载历史数据失败')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+watch(showHistoryDialog, (val) => {
+  if (val) {
+    loadMonitorHistory()
+  }
+})
+
 onMounted(() => {
   loadProducts()
 })
@@ -529,6 +600,13 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+}
+
+.id-history-link {
+  color: #f56c6c;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
 }
 </style>
 

@@ -6,30 +6,61 @@
           <span>监控池</span>
           <div>
             <el-button @click="showUploadDialog = true">上传链接 (.txt)</el-button>
-            <el-button type="success" @click="handleMoveToProfit" :loading="movingToProfit" :disabled="selectedProducts.length === 0">
+            <el-button
+              type="success"
+              @click="handleMoveToProfit"
+              :loading="movingToProfit"
+              :disabled="isRemovedView || selectedProducts.length === 0"
+            >
               加入产品库
             </el-button>
-            <el-button type="primary" @click="handleTriggerMonitor" :loading="triggering" :disabled="selectedProducts.length === 0">
+            <el-button
+              type="primary"
+              @click="handleTriggerMonitor"
+              :loading="triggering"
+              :disabled="isRemovedView || selectedProducts.length === 0"
+            >
               手动触发监控
+            </el-button>
+            <el-button
+              type="danger"
+              :disabled="isRemovedView || selectedProducts.length === 0"
+              :loading="batchRemoving"
+              @click="handleBatchRemove"
+            >
+              批量移除
             </el-button>
             <el-button @click="showScheduleDialog = true">定时任务配置</el-button>
           </div>
         </div>
       </template>
 
-      <div class="toolbar-filters" style="margin-bottom: 12px;">
-        <span style="margin-right: 8px; color: #606266;">自有店铺监控</span>
-        <el-select
-          v-model="filterOwnShop"
-          placeholder="全部"
-          clearable
-          style="width: 160px"
-          @change="onFilterOwnShopChange"
-        >
-          <el-option label="全部" value="" />
-          <el-option label="是" value="yes" />
-          <el-option label="否" value="no" />
-        </el-select>
+      <div class="toolbar-filters" style="margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 16px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="color: #606266;">自有店铺监控</span>
+          <el-select
+            v-model="filterOwnShop"
+            placeholder="全部"
+            clearable
+            style="width: 160px"
+            @change="onToolbarFilterChange"
+          >
+            <el-option label="全部" value="" />
+            <el-option label="是" value="yes" />
+            <el-option label="否" value="no" />
+          </el-select>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="color: #606266;">列表范围</span>
+          <el-select
+            v-model="filterListScope"
+            style="width: 200px"
+            @change="onToolbarFilterChange"
+          >
+            <el-option label="监控中" value="active" />
+            <el-option label="已移除（查看保留的历史）" value="removed" />
+          </el-select>
+        </div>
       </div>
 
       <!-- 产品列表 -->
@@ -40,7 +71,18 @@
         style="width: 100%"
         height="calc(100vh - 350px)"
       >
-        <el-table-column type="selection" width="55" />
+        <el-table-column v-if="!isRemovedView" type="selection" width="55" />
+        <el-table-column label="ID" width="88">
+          <template #default="{ row }">
+            <a
+              v-if="row.has_history"
+              href="#"
+              class="id-history-link"
+              @click.prevent="openHistory(row.id)"
+            >{{ row.id }}</a>
+            <span v-else>{{ row.id }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="缩略图" width="80">
           <template #default="{ row }">
             <el-image
@@ -117,9 +159,8 @@
           </template>
         </el-table-column>
         <el-table-column prop="last_monitored_at" label="最后监控时间" width="180" />
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column v-if="!isRemovedView" label="操作" width="120" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" @click="viewHistory(row.id)">查看历史</el-button>
             <el-button size="small" type="danger" @click="handleRemove(row.id)">移除</el-button>
           </template>
         </el-table-column>
@@ -222,7 +263,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { monitorPoolApi } from '@/api/monitorPool'
 import { listingApi } from '@/api/listing'
@@ -236,6 +277,7 @@ const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 const movingToProfit = ref(false)
+const batchRemoving = ref(false)
 
 const showHistoryDialog = ref(false)
 const historyData = ref([])
@@ -257,9 +299,13 @@ const uploadInputRef = ref(null)
 const uploading = ref(false)
 
 const filterOwnShop = ref('')
+/** active=监控中；removed=已软删除的监控，可点 ID 看历史 */
+const filterListScope = ref('active')
+const isRemovedView = computed(() => filterListScope.value === 'removed')
 
-const onFilterOwnShopChange = () => {
+const onToolbarFilterChange = () => {
   page.value = 1
+  selectedProducts.value = []
   loadProducts()
 }
 
@@ -309,6 +355,7 @@ const loadProducts = async () => {
     } else if (filterOwnShop.value === 'no') {
       params.is_own_shop = false
     }
+    params.list_scope = filterListScope.value === 'removed' ? 'removed' : 'active'
 
     const response = await monitorPoolApi.getProducts(params)
     
@@ -323,8 +370,8 @@ const loadProducts = async () => {
   }
 }
 
-const viewHistory = (productId) => {
-  currentProductId.value = productId
+const openHistory = (monitorId) => {
+  currentProductId.value = monitorId
   showHistoryDialog.value = true
 }
 
@@ -383,19 +430,44 @@ const formatDate = (value) => {
 
 const handleRemove = async (id) => {
   try {
-    await ElMessageBox.confirm('确定要移除该产品吗？', '确认操作', {
+    await ElMessageBox.confirm('确定要停止监控该产品吗？历史记录将保留。', '确认操作', {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
       type: 'warning'
     })
-    
+
     await monitorPoolApi.removeProduct(id)
-    ElMessage.success('产品已移除')
+    ElMessage.success('已停止监控')
     await loadProducts()
   } catch (error) {
     if (error !== 'cancel') {
       ElMessage.error('移除失败')
     }
+  }
+}
+
+const handleBatchRemove = async () => {
+  if (selectedProducts.value.length === 0) {
+    ElMessage.warning('请先勾选要移除的产品')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定要停止监控已选的 ${selectedProducts.value.length} 个产品吗？历史记录将保留。`,
+      '确认操作',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    batchRemoving.value = true
+    const res = await monitorPoolApi.batchInactivate(selectedProducts.value)
+    ElMessage.success(res.message || `已停止 ${res.inactivated ?? 0} 条`)
+    selectedProducts.value = []
+    await loadProducts()
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.detail || '批量移除失败')
+    }
+  } finally {
+    batchRemoving.value = false
   }
 }
 
@@ -555,6 +627,13 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.id-history-link {
+  color: #f56c6c;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 </style>

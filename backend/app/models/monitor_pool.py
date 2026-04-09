@@ -27,7 +27,8 @@ class MonitorPool(Base):
     
     # Relationships
     user = relationship("User", backref="monitor_pools")
-    history = relationship("MonitorHistory", back_populates="monitor_pool", cascade="all, delete-orphan")
+    # 不使用 delete-orphan：移除监控为软删除(INACTIVE)，保留历史；避免误物理删除时级联清空历史
+    history = relationship("MonitorHistory", back_populates="monitor_pool", cascade="save-update, merge")
 
 
 class MonitorHistory(Base):

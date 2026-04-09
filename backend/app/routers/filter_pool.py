@@ -1,4 +1,5 @@
 """Filter pool management API"""
+from collections import defaultdict
 from typing import List, Optional
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
@@ -8,10 +9,43 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.middleware.auth_middleware import require_auth
 from app.models.product import FilterPool
-from app.models.monitor_pool import MonitorPool, MonitorStatus
+from app.models.monitor_pool import MonitorPool, MonitorHistory, MonitorStatus
 from app.services.operation_log_service import create_operation_log
 
 router = APIRouter(prefix="/api/filter-pool", tags=["filter-pool"])
+
+
+def _monitor_history_meta_by_product_url(db: Session, product_urls: List[str]) -> dict:
+    """按 product_url 全局聚合（不按用户）：是否有监控历史、用于拉历史的 monitor_pool_id。"""
+    if not product_urls:
+        return {}
+    unique = list({u for u in product_urls if u})
+    if not unique:
+        return {}
+    monitors = db.query(MonitorPool).filter(MonitorPool.product_url.in_(unique)).all()
+    url_to_mids: dict = defaultdict(list)
+    for m in monitors:
+        url_to_mids[m.product_url].append(m.id)
+    all_mids = [m.id for m in monitors]
+    mids_with_hist: set = set()
+    if all_mids:
+        rows = (
+            db.query(MonitorHistory.monitor_pool_id)
+            .filter(MonitorHistory.monitor_pool_id.in_(all_mids))
+            .distinct()
+            .all()
+        )
+        mids_with_hist = {r[0] for r in rows}
+    out: dict = {}
+    for url in unique:
+        ids = url_to_mids.get(url, [])
+        with_hist = [i for i in ids if i in mids_with_hist]
+        out[url] = {
+            "has_monitor_history": len(with_hist) > 0,
+            "monitor_pool_id_for_history": max(with_hist) if with_hist else None,
+        }
+    return out
+
 
 class FilterPoolResponse(BaseModel):
     """Filter pool response model"""
@@ -34,9 +68,54 @@ class FilterPoolResponse(BaseModel):
     is_fbe: Optional[bool]  # 是否是FBE
     competitor_count: Optional[int]  # 跟卖数
     crawled_at: str
+    has_monitor_history: bool = False
+    monitor_pool_id_for_history: Optional[int] = None
 
     class Config:
         from_attributes = True
+
+
+def _filter_pool_product_to_response(
+    product: FilterPool,
+    history_meta: Optional[dict] = None,
+) -> FilterPoolResponse:
+    hm = history_meta or {
+        "has_monitor_history": False,
+        "monitor_pool_id_for_history": None,
+    }
+    product_dict = {
+        "id": product.id,
+        "product_url": product.product_url,
+        "product_name": product.product_name,
+        "thumbnail_image": product.thumbnail_image,
+        "brand": product.brand,
+        "shop_name": product.shop_name,
+        "price": product.price,
+        "rating": product.rating,
+        "stock": product.stock,
+        "review_count": product.review_count,
+        "shop_rank": product.shop_rank,
+        "category_rank": product.category_rank,
+        "ad_rank": product.ad_rank,
+        "is_fbe": product.is_fbe,
+        "competitor_count": product.competitor_count,
+        "listed_at": product.listed_at.isoformat()
+        if product.listed_at and isinstance(product.listed_at, datetime)
+        else (str(product.listed_at) if product.listed_at else None),
+        "latest_review_at": product.latest_review_at.isoformat()
+        if product.latest_review_at and isinstance(product.latest_review_at, datetime)
+        else (str(product.latest_review_at) if product.latest_review_at else None),
+        "earliest_review_at": product.earliest_review_at.isoformat()
+        if product.earliest_review_at and isinstance(product.earliest_review_at, datetime)
+        else (str(product.earliest_review_at) if product.earliest_review_at else None),
+        "crawled_at": product.crawled_at.isoformat()
+        if product.crawled_at and isinstance(product.crawled_at, datetime)
+        else (str(product.crawled_at) if product.crawled_at else ""),
+        "has_monitor_history": hm["has_monitor_history"],
+        "monitor_pool_id_for_history": hm["monitor_pool_id_for_history"],
+    }
+    return FilterPoolResponse(**product_dict)
+
 
 class FilterRequest(BaseModel):
     """Filter request model"""
@@ -186,33 +265,16 @@ async def get_filter_pool(
     
     # Get paginated results
     products = query.order_by(FilterPool.crawled_at.desc()).offset(skip).limit(limit).all()
-    
-    
-    # Convert datetime fields to strings for response
-    converted_products = []
-    for product in products:
-        product_dict = {
-            "id": product.id,
-            "product_url": product.product_url,
-            "product_name": product.product_name,
-            "thumbnail_image": product.thumbnail_image,
-            "brand": product.brand,
-            "shop_name": product.shop_name,
-            "price": product.price,
-            "rating": product.rating,
-            "stock": product.stock,
-            "review_count": product.review_count,
-            "shop_rank": product.shop_rank,
-            "category_rank": product.category_rank,
-            "ad_rank": product.ad_rank,
-            "is_fbe": product.is_fbe,
-            "competitor_count": product.competitor_count,
-            "listed_at": product.listed_at.isoformat() if product.listed_at and isinstance(product.listed_at, datetime) else (str(product.listed_at) if product.listed_at else None),
-            "latest_review_at": product.latest_review_at.isoformat() if product.latest_review_at and isinstance(product.latest_review_at, datetime) else (str(product.latest_review_at) if product.latest_review_at else None),
-            "earliest_review_at": product.earliest_review_at.isoformat() if product.earliest_review_at and isinstance(product.earliest_review_at, datetime) else (str(product.earliest_review_at) if product.earliest_review_at else None),
-            "crawled_at": product.crawled_at.isoformat() if product.crawled_at and isinstance(product.crawled_at, datetime) else (str(product.crawled_at) if product.crawled_at else "")
-        }
-        converted_products.append(FilterPoolResponse(**product_dict))
+
+    meta_by_url = _monitor_history_meta_by_product_url(
+        db, [p.product_url for p in products]
+    )
+    converted_products = [
+        _filter_pool_product_to_response(
+            p, meta_by_url.get(p.product_url)
+        )
+        for p in products
+    ]
     
     
     response = FilterPoolListResponse(
@@ -269,10 +331,20 @@ async def filter_products(
     
     # Get paginated results
     products = query.order_by(FilterPool.crawled_at.desc()).offset(skip).limit(limit).all()
-    
+
+    meta_by_url = _monitor_history_meta_by_product_url(
+        db, [p.product_url for p in products]
+    )
+    converted_products = [
+        _filter_pool_product_to_response(
+            p, meta_by_url.get(p.product_url)
+        )
+        for p in products
+    ]
+
     # Get IP address
     ip_address = request.client.host if request.client else None
-    
+
     # Log operation
     create_operation_log(
         db=db,
@@ -288,9 +360,9 @@ async def filter_products(
         },
         ip_address=ip_address
     )
-    
+
     return FilterPoolListResponse(
-        items=products,
+        items=converted_products,
         total=total,
         skip=skip,
         limit=limit
@@ -329,11 +401,10 @@ async def move_to_monitor(
         created_ids = []
         
         for fp in filter_products:
-            # Check if already in monitor pool
             existing = db.query(MonitorPool).filter(
                 MonitorPool.product_url == fp.product_url
             ).first()
-            
+
             if not existing:
                 monitor = MonitorPool(
                     filter_pool_id=fp.id,
@@ -342,6 +413,11 @@ async def move_to_monitor(
                     status=MonitorStatus.ACTIVE
                 )
                 db.add(monitor)
+                created_count += 1
+                created_ids.append(fp.id)
+            elif existing.status == MonitorStatus.INACTIVE:
+                existing.status = MonitorStatus.ACTIVE
+                existing.filter_pool_id = fp.id
                 created_count += 1
                 created_ids.append(fp.id)
             else:
