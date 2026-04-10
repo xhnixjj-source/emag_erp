@@ -1850,8 +1850,9 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
         task.progress = 80
         db.commit()
         
-        # 从 keyword_link 获取上架日期（如果存在）
+        # 从 keyword_link 获取上架日期与类目名称（如果存在）
         keyword_link_listed_at = None
+        keyword_link_category = None
         if task.keyword_id:
             keyword_link = db.query(KeywordLink).filter(
                 KeywordLink.product_url == product_url,
@@ -1860,9 +1861,13 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
             if keyword_link and keyword_link.listed_at:
                 keyword_link_listed_at = keyword_link.listed_at
                 logger.info(f"[数据保存] 从 keyword_link 获取上架日期 - 任务ID: {task_id}, 产品URL: {product_url}, 上架日期: {keyword_link_listed_at}")
+            if keyword_link and keyword_link.category:
+                keyword_link_category = keyword_link.category
+                logger.info(f"[数据保存] 从 keyword_link 获取类目名称 - 任务ID: {task_id}, 产品URL: {product_url}, 类目: {keyword_link_category}")
         
-        # 优先使用 keyword_link 中的上架日期，否则使用爬取结果中的
+        # 优先使用 keyword_link 中的上架日期/类目名称，否则使用爬取结果中的
         final_listed_at = keyword_link_listed_at or product_data.get('listed_at')
+        final_category_name = keyword_link_category or product_data.get('category')
         
         # Check if product already exists in filter_pool
         logger.info(f"[数据保存] 开始保存产品数据到数据库 - 任务ID: {task_id}, 产品URL: {product_url}")
@@ -1886,6 +1891,8 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
             # 更新上架日期（优先使用 keyword_link 中的）
             if final_listed_at:
                 existing.listed_at = final_listed_at
+            if final_category_name:
+                existing.category_name = final_category_name
             existing.crawled_at = datetime.utcnow()
             db.commit()
             
@@ -1907,6 +1914,7 @@ def handle_product_crawl_task(task_id: int, task: CrawlTask, db: Session) -> Dic
                 shop_intro_url=product_data.get('shop_intro_url'),
                 shop_url=product_data.get('shop_url'),
                 category_url=product_data.get('category_url'),
+                category_name=final_category_name,
                 price=product_data.get('price'),
                 listed_at=final_listed_at,  # 优先使用 keyword_link 中的上架日期
                 stock=product_data.get('stock_count') or product_data.get('stock'),  # 新格式使用stock_count
@@ -2140,6 +2148,7 @@ def batch_crawl_products(
                             thumbnail_image=product_data.get('thumbnail_image'),
                             brand=product_data.get('brand'),
                             shop_name=product_data.get('shop_name'),
+                            category_name=product_data.get('category'),
                             price=product_data.get('price'),
                             listed_at=product_data.get('listed_at'),
                             stock=product_data.get('stock'),

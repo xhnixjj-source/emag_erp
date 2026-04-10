@@ -21,6 +21,8 @@ class FilterPool(Base):
     shop_url = Column(String, nullable=True)
     # 产品主类目页完整URL（用于后续复用类目排名/访问类目页）
     category_url = Column(String, nullable=True)
+    # 类目名称（来源于 keyword_links.category）
+    category_name = Column(String, nullable=True)
     price = Column(Float, nullable=True)
     # 评分（1-5分）
     rating = Column(Float, nullable=True)

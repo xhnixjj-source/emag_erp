@@ -55,6 +55,7 @@ class FilterPoolResponse(BaseModel):
     thumbnail_image: Optional[str]  # 产品缩略图URL
     brand: Optional[str]  # 品牌
     shop_name: Optional[str]  # 店铺名称
+    category_name: Optional[str]  # 类目名称
     price: Optional[float]
     rating: Optional[float]
     listed_at: Optional[str]
@@ -90,6 +91,7 @@ def _filter_pool_product_to_response(
         "thumbnail_image": product.thumbnail_image,
         "brand": product.brand,
         "shop_name": product.shop_name,
+        "category_name": product.category_name,
         "price": product.price,
         "rating": product.rating,
         "stock": product.stock,
