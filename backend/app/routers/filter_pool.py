@@ -14,6 +14,35 @@ from app.services.operation_log_service import create_operation_log
 
 router = APIRouter(prefix="/api/filter-pool", tags=["filter-pool"])
 
+_FILTER_POOL_SORT_COLUMNS = {
+    "id": FilterPool.id,
+    "product_name": FilterPool.product_name,
+    "brand": FilterPool.brand,
+    "shop_name": FilterPool.shop_name,
+    "category_name": FilterPool.category_name,
+    "price": FilterPool.price,
+    "stock": FilterPool.stock,
+    "review_count": FilterPool.review_count,
+    "rating": FilterPool.rating,
+    "listed_at": FilterPool.listed_at,
+    "shop_rank": FilterPool.shop_rank,
+    "category_rank": FilterPool.category_rank,
+    "ad_rank": FilterPool.ad_rank,
+    "is_fbe": FilterPool.is_fbe,
+    "competitor_count": FilterPool.competitor_count,
+    "crawled_at": FilterPool.crawled_at,
+}
+
+
+def _filter_pool_order_columns(sort_by: Optional[str], sort_order: Optional[str]):
+    """合法字段白名单排序；非法或未传 sort_by 时按 crawled_at 降序。"""
+    key = (sort_by or "").strip().lower() or "crawled_at"
+    if key not in _FILTER_POOL_SORT_COLUMNS:
+        key = "crawled_at"
+    col = _FILTER_POOL_SORT_COLUMNS[key]
+    asc = (sort_order or "desc").strip().lower() == "asc"
+    return col, asc
+
 
 def _monitor_history_meta_by_product_url(db: Session, product_urls: List[str]) -> dict:
     """按 product_url 全局聚合（不按用户）：是否有监控历史、用于拉历史的 monitor_pool_id。"""
@@ -180,7 +209,9 @@ async def get_filter_pool(
     current_user: dict = Depends(require_auth),
     db: Session = Depends(get_db),
     skip: int = 0,
-    limit: int = 100
+    limit: int = 100,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = Query("desc"),
 ):
     """Get filter pool with filters"""
     
@@ -254,10 +285,16 @@ async def get_filter_pool(
     
     # Get total count
     total = query.count()
-    
-    
-    # Get paginated results
-    products = query.order_by(FilterPool.crawled_at.desc()).offset(skip).limit(limit).all()
+
+    order_col, order_asc = _filter_pool_order_columns(sort_by, sort_order)
+    order_primary = order_col.asc() if order_asc else order_col.desc()
+    # 次要键保证分页稳定
+    products = (
+        query.order_by(order_primary, FilterPool.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
     meta_by_url = _monitor_history_meta_by_product_url(
         db, [p.product_url for p in products]

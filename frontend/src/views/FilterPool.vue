@@ -145,11 +145,13 @@
         :data="products"
         v-loading="loading"
         @selection-change="handleSelectionChange"
+        :default-sort="{ prop: 'crawled_at', order: 'descending' }"
+        @sort-change="handleSortChange"
         style="width: 100%"
         height="calc(100vh - 450px)"
       >
         <el-table-column type="selection" width="55" />
-        <el-table-column label="ID" width="88">
+        <el-table-column prop="id" label="ID" width="88" sortable="custom">
           <template #default="{ row }">
             <a
               v-if="row.has_monitor_history && row.monitor_pool_id_for_history"
@@ -177,9 +179,10 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="product_name" label="产品名称" show-overflow-tooltip min-width="200" />
-        <el-table-column prop="brand" label="品牌" width="120" />
-        <el-table-column prop="shop_name" label="店铺名称" width="150" show-overflow-tooltip />
+        <el-table-column prop="product_name" label="产品名称" show-overflow-tooltip min-width="200" sortable="custom" />
+        <el-table-column prop="brand" label="品牌" width="120" sortable="custom" />
+        <el-table-column prop="shop_name" label="店铺名称" width="150" show-overflow-tooltip sortable="custom" />
+        <el-table-column prop="category_name" label="类目" width="160" show-overflow-tooltip sortable="custom" />
         <el-table-column label="产品链接" min-width="250" show-overflow-tooltip>
           <template #default="{ row }">
             <a :href="row.product_url" target="_blank" style="color: #409eff; text-decoration: none;">
@@ -187,7 +190,7 @@
             </a>
           </template>
         </el-table-column>
-        <el-table-column prop="listed_at" label="上架日期" width="150">
+        <el-table-column prop="listed_at" label="上架日期" width="150" sortable="custom">
           <template #default="{ row }">
             <span v-if="row.listed_at">
               {{ formatDate(row.listed_at) }}
@@ -195,36 +198,36 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="price" label="价格" width="100">
+        <el-table-column prop="price" label="价格" width="100" sortable="custom">
           <template #default="{ row }">
             {{ row.price ? `€${row.price}` : '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="stock" label="库存" width="100">
+        <el-table-column prop="stock" label="库存" width="100" sortable="custom">
           <template #default="{ row }">
             <span :style="{ color: row.stock > 0 ? '#67c23a' : '#f56c6c' }">
               {{ row.stock !== null && row.stock !== undefined ? row.stock : '-' }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="review_count" label="评论数" width="100" />
-        <el-table-column prop="rating" label="评分" width="100">
+        <el-table-column prop="review_count" label="评论数" width="100" sortable="custom" />
+        <el-table-column prop="rating" label="评分" width="100" sortable="custom">
           <template #default="{ row }">
             {{ row.rating !== null && row.rating !== undefined ? row.rating.toFixed(2) : '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="FBE" width="80">
+        <el-table-column prop="is_fbe" label="FBE" width="80" sortable="custom">
           <template #default="{ row }">
             <el-tag :type="row.is_fbe ? 'success' : 'info'" size="small">
               {{ row.is_fbe ? '是' : '否' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="competitor_count" label="跟卖数" width="100" />
-        <el-table-column prop="shop_rank" label="店铺排名" width="120" />
-        <el-table-column prop="category_rank" label="类目排名" width="120" />
-        <el-table-column prop="ad_rank" label="广告排名" width="120" />
-        <el-table-column prop="crawled_at" label="爬取时间" width="180" show-overflow-tooltip>
+        <el-table-column prop="competitor_count" label="跟卖数" width="100" sortable="custom" />
+        <el-table-column prop="shop_rank" label="店铺排名" width="120" sortable="custom" />
+        <el-table-column prop="category_rank" label="类目排名" width="120" sortable="custom" />
+        <el-table-column prop="ad_rank" label="广告排名" width="120" sortable="custom" />
+        <el-table-column prop="crawled_at" label="爬取时间" width="180" show-overflow-tooltip sortable="custom">
           <template #default="{ row }">
             <span style="white-space: nowrap;">
               {{ formatDateTime(row.crawled_at) }}
@@ -294,6 +297,9 @@ const shops = ref([])
 const page = ref(1)
 const pageSize = ref(100)
 const total = ref(0)
+/** 与服务端分页一致：custom 排序走 API */
+const sortBy = ref('crawled_at')
+const sortOrder = ref('desc')
 
 const showHistoryDialog = ref(false)
 const historyData = ref([])
@@ -403,8 +409,10 @@ const loadProducts = async () => {
     if (filters.exclude_shops && filters.exclude_shops.length > 0) {
       params.exclude_shops = filters.exclude_shops
     }
-    
-    
+
+    params.sort_by = sortBy.value
+    params.sort_order = sortOrder.value
+
     const response = await filterPoolApi.getProducts(params)
     
     
@@ -432,6 +440,18 @@ const loadProducts = async () => {
   }
 }
 
+const handleSortChange = ({ prop, order }) => {
+  if (!prop || !order) {
+    sortBy.value = 'crawled_at'
+    sortOrder.value = 'desc'
+  } else {
+    sortBy.value = prop
+    sortOrder.value = order === 'ascending' ? 'asc' : 'desc'
+  }
+  page.value = 1
+  loadProducts()
+}
+
 const handleApplyFilter = async () => {
   filtering.value = true
   try {
@@ -457,6 +477,8 @@ const handleResetFilter = () => {
   filters.review_count_max = null
   filters.rating_min = null
   filters.rating_max = null
+  sortBy.value = 'crawled_at'
+  sortOrder.value = 'desc'
   loadProducts()
 }
 
