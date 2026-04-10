@@ -389,37 +389,19 @@ async def get_keyword_links(
         if offer_count_max is not None:
             query = query.filter(KeywordLink.offer_count <= offer_count_max)
         
-        # 上架日期筛选
+        # 上架日期筛选：仅按 listed_at 与起始时间比较（与筛选池一致）
         if listed_at_period:
             from datetime import timedelta
-            from sqlalchemy import or_, and_
             now = datetime.utcnow()
-            
-            # 计算时间范围起始日期
             start_date = None
             if listed_at_period == "6months":
-                # 使用 timedelta 近似 6 个月（约 180 天）
                 start_date = now - timedelta(days=180)
             elif listed_at_period == "1year":
-                # 使用 timedelta 近似 1 年（365 天）
                 start_date = now - timedelta(days=365)
             elif listed_at_period == "1.5years":
-                # 使用 timedelta 近似 1.5 年（约 547 天）
                 start_date = now - timedelta(days=547)
-            
-            # 筛选逻辑：包含成功获取上架日期且在时间范围内的记录，以及去爬过但没有爬取到的记录（not_found/error）
             if start_date:
-                query = query.filter(
-                    or_(
-                        # 成功获取上架日期且在时间范围内
-                        and_(
-                            KeywordLink.listed_at_status == 'success',
-                            KeywordLink.listed_at >= start_date
-                        ),
-                        # 去爬过但没有爬取到的记录（not_found 或 error，不包括 pending）
-                        KeywordLink.listed_at_status.in_(['not_found', 'error'])
-                    )
-                )
+                query = query.filter(KeywordLink.listed_at >= start_date)
         
         # 品牌剔除筛选
         if exclude_brands:

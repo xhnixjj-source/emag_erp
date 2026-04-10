@@ -4,7 +4,7 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy import or_
 from pydantic import BaseModel
 from app.database import get_db
 from app.middleware.auth_middleware import require_auth
@@ -217,7 +217,7 @@ async def get_filter_pool(
         else:
             query = query.filter(or_(FilterPool.stock == 0, FilterPool.stock.is_(None)))
 
-    # 上架日期筛选：逻辑与链接初筛保持一致
+    # 上架日期筛选：仅按 listed_at 与起始时间比较（无 listed_at 的记录不满足条件）
     if listed_at_period:
         now = datetime.utcnow()
         start_date = None
@@ -229,16 +229,7 @@ async def get_filter_pool(
             start_date = now - timedelta(days=547)
 
         if start_date:
-            # 成功获取且在时间范围内，或已去爬但未获取到（not_found/error），排除 pending
-            query = query.filter(
-                or_(
-                    and_(
-                        FilterPool.listed_at_status == "success",
-                        FilterPool.listed_at >= start_date,
-                    ),
-                    FilterPool.listed_at_status.in_(["not_found", "error"]),
-                )
-            )
+            query = query.filter(FilterPool.listed_at >= start_date)
 
     # 品牌剔除：逻辑与链接初筛保持一致，保留 brand 为 NULL 的记录
     if exclude_brands:
@@ -510,7 +501,7 @@ async def get_filter_pool_count(
         else:
             query = query.filter(or_(FilterPool.stock == 0, FilterPool.stock.is_(None)))
 
-    # 上架日期筛选
+    # 上架日期筛选（与列表接口一致：仅按 listed_at）
     if listed_at_period:
         now = datetime.utcnow()
         start_date = None
@@ -522,15 +513,7 @@ async def get_filter_pool_count(
             start_date = now - timedelta(days=547)
 
         if start_date:
-            query = query.filter(
-                or_(
-                    and_(
-                        FilterPool.listed_at_status == "success",
-                        FilterPool.listed_at >= start_date,
-                    ),
-                    FilterPool.listed_at_status.in_(["not_found", "error"]),
-                )
-            )
+            query = query.filter(FilterPool.listed_at >= start_date)
 
     # 品牌剔除
     if exclude_brands:
