@@ -393,6 +393,9 @@ const loadProducts = async () => {
     if (filters.category_rank_max !== null && filters.category_rank_max !== '') {
       params.max_category_rank = filters.category_rank_max
     }
+    if (filters.ad_rank_max !== null && filters.ad_rank_max !== '') {
+      params.max_ad_rank = filters.ad_rank_max
+    }
     // Convert stock string to boolean for has_stock
     if (filters.stock !== null && filters.stock !== '') {
       params.has_stock = filters.stock === 'in_stock'
@@ -544,7 +547,10 @@ const handleExport = async () => {
     if (filters.listed_at_period) params.listed_at_period = filters.listed_at_period
     if (filters.exclude_brands && filters.exclude_brands.length > 0) params.exclude_brands = filters.exclude_brands
     if (filters.exclude_shops && filters.exclude_shops.length > 0) params.exclude_shops = filters.exclude_shops
-    
+
+    params.sort_by = sortBy.value
+    params.sort_order = sortOrder.value
+
     const blob = await filterPoolApi.exportProducts(params)
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')

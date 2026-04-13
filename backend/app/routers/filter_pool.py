@@ -1,8 +1,11 @@
 """Filter pool management API"""
+import csv
+import io
 from collections import defaultdict
 from typing import List, Optional
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from pydantic import BaseModel
@@ -42,6 +45,97 @@ def _filter_pool_order_columns(sort_by: Optional[str], sort_order: Optional[str]
     col = _FILTER_POOL_SORT_COLUMNS[key]
     asc = (sort_order or "desc").strip().lower() == "asc"
     return col, asc
+
+
+def _apply_filter_pool_filters(
+    query,
+    *,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    min_review_count: Optional[int] = None,
+    max_review_count: Optional[int] = None,
+    min_rating: Optional[float] = None,
+    max_rating: Optional[float] = None,
+    min_shop_rank: Optional[int] = None,
+    max_shop_rank: Optional[int] = None,
+    min_category_rank: Optional[int] = None,
+    max_category_rank: Optional[int] = None,
+    min_ad_rank: Optional[int] = None,
+    max_ad_rank: Optional[int] = None,
+    has_stock: Optional[bool] = None,
+    listed_at_period: Optional[str] = None,
+    exclude_brands: Optional[List[str]] = None,
+    exclude_shops: Optional[List[str]] = None,
+):
+    """与列表、计数接口相同的 AND 筛选逻辑。"""
+    if min_price is not None:
+        query = query.filter(FilterPool.price >= min_price)
+    if max_price is not None:
+        query = query.filter(FilterPool.price <= max_price)
+    if min_review_count is not None:
+        query = query.filter(FilterPool.review_count >= min_review_count)
+    if max_review_count is not None:
+        query = query.filter(FilterPool.review_count <= max_review_count)
+    if min_rating is not None:
+        query = query.filter(FilterPool.rating >= min_rating)
+    if max_rating is not None:
+        query = query.filter(FilterPool.rating <= max_rating)
+    if min_shop_rank is not None:
+        query = query.filter(FilterPool.shop_rank >= min_shop_rank)
+    if max_shop_rank is not None:
+        query = query.filter(FilterPool.shop_rank <= max_shop_rank)
+    if min_category_rank is not None:
+        query = query.filter(FilterPool.category_rank >= min_category_rank)
+    if max_category_rank is not None:
+        query = query.filter(FilterPool.category_rank <= max_category_rank)
+    if min_ad_rank is not None:
+        query = query.filter(FilterPool.ad_rank >= min_ad_rank)
+    if max_ad_rank is not None:
+        query = query.filter(FilterPool.ad_rank <= max_ad_rank)
+    if has_stock is not None:
+        if has_stock:
+            query = query.filter(FilterPool.stock > 0)
+        else:
+            query = query.filter(or_(FilterPool.stock == 0, FilterPool.stock.is_(None)))
+
+    if listed_at_period:
+        now = datetime.utcnow()
+        start_date = None
+        if listed_at_period == "6months":
+            start_date = now - timedelta(days=180)
+        elif listed_at_period == "1year":
+            start_date = now - timedelta(days=365)
+        elif listed_at_period == "1.5years":
+            start_date = now - timedelta(days=547)
+
+        if start_date:
+            query = query.filter(FilterPool.listed_at >= start_date)
+
+    if exclude_brands:
+        query = query.filter(
+            or_(
+                FilterPool.brand.is_(None),
+                ~FilterPool.brand.in_(exclude_brands),
+            )
+        )
+
+    if exclude_shops:
+        query = query.filter(
+            or_(
+                FilterPool.shop_name.is_(None),
+                ~FilterPool.shop_name.in_(exclude_shops),
+            )
+        )
+
+    return query
+
+
+def _filter_pool_csv_cell_dt(value: Optional[datetime]) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    return str(value)
 
 
 def _monitor_history_meta_by_product_url(db: Session, product_urls: List[str]) -> dict:
@@ -199,6 +293,8 @@ async def get_filter_pool(
     max_shop_rank: Optional[int] = None,
     min_category_rank: Optional[int] = None,
     max_category_rank: Optional[int] = None,
+    min_ad_rank: Optional[int] = None,
+    max_ad_rank: Optional[int] = None,
     has_stock: Optional[bool] = None,
     listed_at_period: Optional[str] = None,
     # 品牌/店铺剔除与链接初筛保持兼容：既支持 exclude_brands=a&exclude_brands=b 也支持 exclude_brands[]=a&exclude_brands[]=b
@@ -222,67 +318,27 @@ async def get_filter_pool(
         exclude_brands = exclude_brands_brackets
     if (not exclude_shops) and exclude_shops_brackets:
         exclude_shops = exclude_shops_brackets
-    
-    # Apply filters（所有条件联动按 AND 过滤）
-    if min_price is not None:
-        query = query.filter(FilterPool.price >= min_price)
-    if max_price is not None:
-        query = query.filter(FilterPool.price <= max_price)
-    if min_review_count is not None:
-        query = query.filter(FilterPool.review_count >= min_review_count)
-    if max_review_count is not None:
-        query = query.filter(FilterPool.review_count <= max_review_count)
-    if min_rating is not None:
-        query = query.filter(FilterPool.rating >= min_rating)
-    if max_rating is not None:
-        query = query.filter(FilterPool.rating <= max_rating)
-    if min_shop_rank is not None:
-        query = query.filter(FilterPool.shop_rank >= min_shop_rank)
-    if max_shop_rank is not None:
-        query = query.filter(FilterPool.shop_rank <= max_shop_rank)
-    if min_category_rank is not None:
-        query = query.filter(FilterPool.category_rank >= min_category_rank)
-    if max_category_rank is not None:
-        query = query.filter(FilterPool.category_rank <= max_category_rank)
-    if has_stock is not None:
-        if has_stock:
-            query = query.filter(FilterPool.stock > 0)
-        else:
-            query = query.filter(or_(FilterPool.stock == 0, FilterPool.stock.is_(None)))
 
-    # 上架日期筛选：仅按 listed_at 与起始时间比较（无 listed_at 的记录不满足条件）
-    if listed_at_period:
-        now = datetime.utcnow()
-        start_date = None
-        if listed_at_period == "6months":
-            start_date = now - timedelta(days=180)
-        elif listed_at_period == "1year":
-            start_date = now - timedelta(days=365)
-        elif listed_at_period == "1.5years":
-            start_date = now - timedelta(days=547)
+    query = _apply_filter_pool_filters(
+        query,
+        min_price=min_price,
+        max_price=max_price,
+        min_review_count=min_review_count,
+        max_review_count=max_review_count,
+        min_rating=min_rating,
+        max_rating=max_rating,
+        min_shop_rank=min_shop_rank,
+        max_shop_rank=max_shop_rank,
+        min_category_rank=min_category_rank,
+        max_category_rank=max_category_rank,
+        min_ad_rank=min_ad_rank,
+        max_ad_rank=max_ad_rank,
+        has_stock=has_stock,
+        listed_at_period=listed_at_period,
+        exclude_brands=exclude_brands,
+        exclude_shops=exclude_shops,
+    )
 
-        if start_date:
-            query = query.filter(FilterPool.listed_at >= start_date)
-
-    # 品牌剔除：逻辑与链接初筛保持一致，保留 brand 为 NULL 的记录
-    if exclude_brands:
-        query = query.filter(
-            or_(
-                FilterPool.brand.is_(None),
-                ~FilterPool.brand.in_(exclude_brands),
-            )
-        )
-
-    # 店铺剔除：与品牌剔除逻辑一致，保留 shop_name 为 NULL 的记录
-    if exclude_shops:
-        query = query.filter(
-            or_(
-                FilterPool.shop_name.is_(None),
-                ~FilterPool.shop_name.in_(exclude_shops),
-            )
-        )
-    
-    
     # Get total count
     total = query.count()
 
@@ -495,6 +551,8 @@ async def get_filter_pool_count(
     max_shop_rank: Optional[int] = None,
     min_category_rank: Optional[int] = None,
     max_category_rank: Optional[int] = None,
+    min_ad_rank: Optional[int] = None,
+    max_ad_rank: Optional[int] = None,
     has_stock: Optional[bool] = None,
     listed_at_period: Optional[str] = None,
     exclude_brands: Optional[List[str]] = Query(None),
@@ -512,66 +570,159 @@ async def get_filter_pool_count(
         exclude_brands = exclude_brands_brackets
     if (not exclude_shops) and exclude_shops_brackets:
         exclude_shops = exclude_shops_brackets
-    
-    # Apply filters (same as get_filter_pool，保持联动一致)
-    if min_price is not None:
-        query = query.filter(FilterPool.price >= min_price)
-    if max_price is not None:
-        query = query.filter(FilterPool.price <= max_price)
-    if min_review_count is not None:
-        query = query.filter(FilterPool.review_count >= min_review_count)
-    if max_review_count is not None:
-        query = query.filter(FilterPool.review_count <= max_review_count)
-    if min_rating is not None:
-        query = query.filter(FilterPool.rating >= min_rating)
-    if max_rating is not None:
-        query = query.filter(FilterPool.rating <= max_rating)
-    if min_shop_rank is not None:
-        query = query.filter(FilterPool.shop_rank >= min_shop_rank)
-    if max_shop_rank is not None:
-        query = query.filter(FilterPool.shop_rank <= max_shop_rank)
-    if min_category_rank is not None:
-        query = query.filter(FilterPool.category_rank >= min_category_rank)
-    if max_category_rank is not None:
-        query = query.filter(FilterPool.category_rank <= max_category_rank)
-    if has_stock is not None:
-        if has_stock:
-            query = query.filter(FilterPool.stock > 0)
-        else:
-            query = query.filter(or_(FilterPool.stock == 0, FilterPool.stock.is_(None)))
 
-    # 上架日期筛选（与列表接口一致：仅按 listed_at）
-    if listed_at_period:
-        now = datetime.utcnow()
-        start_date = None
-        if listed_at_period == "6months":
-            start_date = now - timedelta(days=180)
-        elif listed_at_period == "1year":
-            start_date = now - timedelta(days=365)
-        elif listed_at_period == "1.5years":
-            start_date = now - timedelta(days=547)
+    query = _apply_filter_pool_filters(
+        query,
+        min_price=min_price,
+        max_price=max_price,
+        min_review_count=min_review_count,
+        max_review_count=max_review_count,
+        min_rating=min_rating,
+        max_rating=max_rating,
+        min_shop_rank=min_shop_rank,
+        max_shop_rank=max_shop_rank,
+        min_category_rank=min_category_rank,
+        max_category_rank=max_category_rank,
+        min_ad_rank=min_ad_rank,
+        max_ad_rank=max_ad_rank,
+        has_stock=has_stock,
+        listed_at_period=listed_at_period,
+        exclude_brands=exclude_brands,
+        exclude_shops=exclude_shops,
+    )
 
-        if start_date:
-            query = query.filter(FilterPool.listed_at >= start_date)
-
-    # 品牌剔除
-    if exclude_brands:
-        query = query.filter(
-            or_(
-                FilterPool.brand.is_(None),
-                ~FilterPool.brand.in_(exclude_brands),
-            )
-        )
-
-    # 店铺剔除
-    if exclude_shops:
-        query = query.filter(
-            or_(
-                FilterPool.shop_name.is_(None),
-                ~FilterPool.shop_name.in_(exclude_shops),
-            )
-        )
-    
     count = query.count()
     return FilterCountResponse(count=count)
+
+
+@router.get("/export")
+async def export_filter_pool_csv(
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    min_review_count: Optional[int] = None,
+    max_review_count: Optional[int] = None,
+    min_rating: Optional[float] = None,
+    max_rating: Optional[float] = None,
+    min_shop_rank: Optional[int] = None,
+    max_shop_rank: Optional[int] = None,
+    min_category_rank: Optional[int] = None,
+    max_category_rank: Optional[int] = None,
+    min_ad_rank: Optional[int] = None,
+    max_ad_rank: Optional[int] = None,
+    has_stock: Optional[bool] = None,
+    listed_at_period: Optional[str] = None,
+    exclude_brands: Optional[List[str]] = Query(None),
+    exclude_brands_brackets: Optional[List[str]] = Query(None, alias="exclude_brands[]"),
+    exclude_shops: Optional[List[str]] = Query(None),
+    exclude_shops_brackets: Optional[List[str]] = Query(None, alias="exclude_shops[]"),
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = Query("desc"),
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """导出当前筛选条件下的全量筛选池数据为 CSV（与列表接口筛选一致，不分页）。"""
+    if (not exclude_brands) and exclude_brands_brackets:
+        exclude_brands = exclude_brands_brackets
+    if (not exclude_shops) and exclude_shops_brackets:
+        exclude_shops = exclude_shops_brackets
+
+    query = db.query(FilterPool)
+    query = _apply_filter_pool_filters(
+        query,
+        min_price=min_price,
+        max_price=max_price,
+        min_review_count=min_review_count,
+        max_review_count=max_review_count,
+        min_rating=min_rating,
+        max_rating=max_rating,
+        min_shop_rank=min_shop_rank,
+        max_shop_rank=max_shop_rank,
+        min_category_rank=min_category_rank,
+        max_category_rank=max_category_rank,
+        min_ad_rank=min_ad_rank,
+        max_ad_rank=max_ad_rank,
+        has_stock=has_stock,
+        listed_at_period=listed_at_period,
+        exclude_brands=exclude_brands,
+        exclude_shops=exclude_shops,
+    )
+
+    order_col, order_asc = _filter_pool_order_columns(sort_by, sort_order)
+    order_primary = order_col.asc() if order_asc else order_col.desc()
+    ordered = query.order_by(order_primary, FilterPool.id.desc())
+
+    header = [
+        "id",
+        "product_url",
+        "product_name",
+        "brand",
+        "shop_name",
+        "category_name",
+        "price",
+        "rating",
+        "listed_at",
+        "stock",
+        "review_count",
+        "latest_review_at",
+        "earliest_review_at",
+        "shop_rank",
+        "category_rank",
+        "ad_rank",
+        "is_fbe",
+        "competitor_count",
+        "crawled_at",
+        "thumbnail_image",
+        "shop_intro_url",
+        "shop_url",
+        "category_url",
+        "listed_at_status",
+    ]
+
+    def iter_csv():
+        yield b"\xef\xbb\xbf"
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(header)
+        yield buf.getvalue().encode("utf-8")
+        buf.seek(0)
+        buf.truncate(0)
+
+        for p in ordered.yield_per(500):
+            writer.writerow(
+                [
+                    p.id,
+                    p.product_url or "",
+                    p.product_name or "",
+                    p.brand or "",
+                    p.shop_name or "",
+                    p.category_name or "",
+                    p.price if p.price is not None else "",
+                    p.rating if p.rating is not None else "",
+                    _filter_pool_csv_cell_dt(p.listed_at),
+                    p.stock if p.stock is not None else "",
+                    p.review_count if p.review_count is not None else "",
+                    _filter_pool_csv_cell_dt(p.latest_review_at),
+                    _filter_pool_csv_cell_dt(p.earliest_review_at),
+                    p.shop_rank if p.shop_rank is not None else "",
+                    p.category_rank if p.category_rank is not None else "",
+                    p.ad_rank if p.ad_rank is not None else "",
+                    "1" if p.is_fbe is True else ("0" if p.is_fbe is False else ""),
+                    p.competitor_count if p.competitor_count is not None else "",
+                    _filter_pool_csv_cell_dt(p.crawled_at),
+                    p.thumbnail_image or "",
+                    p.shop_intro_url or "",
+                    p.shop_url or "",
+                    p.category_url or "",
+                    p.listed_at_status or "",
+                ]
+            )
+            yield buf.getvalue().encode("utf-8")
+            buf.seek(0)
+            buf.truncate(0)
+
+    response = StreamingResponse(iter_csv(), media_type="text/csv; charset=utf-8")
+    response.headers["Content-Disposition"] = (
+        f"attachment; filename=filter_pool_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+    )
+    return response
 
