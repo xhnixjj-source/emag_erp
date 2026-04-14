@@ -64,6 +64,7 @@ def _apply_filter_pool_filters(
     max_ad_rank: Optional[int] = None,
     has_stock: Optional[bool] = None,
     listed_at_period: Optional[str] = None,
+    include_categories: Optional[List[str]] = None,
     exclude_brands: Optional[List[str]] = None,
     exclude_shops: Optional[List[str]] = None,
 ):
@@ -110,6 +111,9 @@ def _apply_filter_pool_filters(
 
         if start_date:
             query = query.filter(FilterPool.listed_at >= start_date)
+
+    if include_categories:
+        query = query.filter(FilterPool.category_name.in_(include_categories))
 
     if exclude_brands:
         query = query.filter(
@@ -298,6 +302,8 @@ async def get_filter_pool(
     has_stock: Optional[bool] = None,
     listed_at_period: Optional[str] = None,
     # 品牌/店铺剔除与链接初筛保持兼容：既支持 exclude_brands=a&exclude_brands=b 也支持 exclude_brands[]=a&exclude_brands[]=b
+    include_categories: Optional[List[str]] = Query(None),
+    include_categories_brackets: Optional[List[str]] = Query(None, alias="include_categories[]"),
     exclude_brands: Optional[List[str]] = Query(None),
     exclude_brands_brackets: Optional[List[str]] = Query(None, alias="exclude_brands[]"),
     exclude_shops: Optional[List[str]] = Query(None),
@@ -318,6 +324,8 @@ async def get_filter_pool(
         exclude_brands = exclude_brands_brackets
     if (not exclude_shops) and exclude_shops_brackets:
         exclude_shops = exclude_shops_brackets
+    if (not include_categories) and include_categories_brackets:
+        include_categories = include_categories_brackets
 
     query = _apply_filter_pool_filters(
         query,
@@ -335,6 +343,7 @@ async def get_filter_pool(
         max_ad_rank=max_ad_rank,
         has_stock=has_stock,
         listed_at_period=listed_at_period,
+        include_categories=include_categories,
         exclude_brands=exclude_brands,
         exclude_shops=exclude_shops,
     )
@@ -555,6 +564,8 @@ async def get_filter_pool_count(
     max_ad_rank: Optional[int] = None,
     has_stock: Optional[bool] = None,
     listed_at_period: Optional[str] = None,
+    include_categories: Optional[List[str]] = Query(None),
+    include_categories_brackets: Optional[List[str]] = Query(None, alias="include_categories[]"),
     exclude_brands: Optional[List[str]] = Query(None),
     exclude_brands_brackets: Optional[List[str]] = Query(None, alias="exclude_brands[]"),
     exclude_shops: Optional[List[str]] = Query(None),
@@ -570,6 +581,8 @@ async def get_filter_pool_count(
         exclude_brands = exclude_brands_brackets
     if (not exclude_shops) and exclude_shops_brackets:
         exclude_shops = exclude_shops_brackets
+    if (not include_categories) and include_categories_brackets:
+        include_categories = include_categories_brackets
 
     query = _apply_filter_pool_filters(
         query,
@@ -587,6 +600,7 @@ async def get_filter_pool_count(
         max_ad_rank=max_ad_rank,
         has_stock=has_stock,
         listed_at_period=listed_at_period,
+        include_categories=include_categories,
         exclude_brands=exclude_brands,
         exclude_shops=exclude_shops,
     )
@@ -611,6 +625,8 @@ async def export_filter_pool_csv(
     max_ad_rank: Optional[int] = None,
     has_stock: Optional[bool] = None,
     listed_at_period: Optional[str] = None,
+    include_categories: Optional[List[str]] = Query(None),
+    include_categories_brackets: Optional[List[str]] = Query(None, alias="include_categories[]"),
     exclude_brands: Optional[List[str]] = Query(None),
     exclude_brands_brackets: Optional[List[str]] = Query(None, alias="exclude_brands[]"),
     exclude_shops: Optional[List[str]] = Query(None),
@@ -625,6 +641,8 @@ async def export_filter_pool_csv(
         exclude_brands = exclude_brands_brackets
     if (not exclude_shops) and exclude_shops_brackets:
         exclude_shops = exclude_shops_brackets
+    if (not include_categories) and include_categories_brackets:
+        include_categories = include_categories_brackets
 
     query = db.query(FilterPool)
     query = _apply_filter_pool_filters(
@@ -643,6 +661,7 @@ async def export_filter_pool_csv(
         max_ad_rank=max_ad_rank,
         has_stock=has_stock,
         listed_at_period=listed_at_period,
+        include_categories=include_categories,
         exclude_brands=exclude_brands,
         exclude_shops=exclude_shops,
     )

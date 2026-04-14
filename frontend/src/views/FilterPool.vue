@@ -82,6 +82,25 @@
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="24" :md="16" :lg="12" :xl="8">
+            <el-form-item label="类目筛选">
+              <el-select
+                v-model="filters.include_categories"
+                placeholder="选择要筛选的类目"
+                multiple
+                filterable
+                clearable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="category in categories"
+                  :key="category"
+                  :label="category"
+                  :value="category"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="24" :md="16" :lg="12" :xl="8">
             <el-form-item label="品牌剔除">
               <el-select
                 v-model="filters.exclude_brands"
@@ -294,6 +313,7 @@ const selectedProducts = ref([])
 const selectAll = ref(false)
 const brands = ref([])
 const shops = ref([])
+const categories = ref([])
 const page = ref(1)
 const pageSize = ref(100)
 const total = ref(0)
@@ -318,6 +338,7 @@ const filters = reactive({
   ad_rank_max: null,
   stock: null,
   listed_at_period: null,
+  include_categories: [],
   exclude_brands: [],
   exclude_shops: []
 })
@@ -404,6 +425,10 @@ const loadProducts = async () => {
     if (filters.listed_at_period) {
       params.listed_at_period = filters.listed_at_period
     }
+    // 类目筛选
+    if (filters.include_categories && filters.include_categories.length > 0) {
+      params.include_categories = filters.include_categories
+    }
     // 品牌剔除
     if (filters.exclude_brands && filters.exclude_brands.length > 0) {
       params.exclude_brands = filters.exclude_brands
@@ -422,10 +447,14 @@ const loadProducts = async () => {
     products.value = response.data || response.items || []
     total.value = response.total || 0
 
-    // 根据当前筛选结果动态生成可用品牌和店铺列表
+    // 根据当前筛选结果动态生成可用类目、品牌和店铺列表
     const brandSet = new Set()
     const shopSet = new Set()
+    const categorySet = new Set()
     products.value.forEach(p => {
+      if (p && p.category_name) {
+        categorySet.add(p.category_name)
+      }
       if (p && p.brand) {
         brandSet.add(p.brand)
       }
@@ -433,6 +462,7 @@ const loadProducts = async () => {
         shopSet.add(p.shop_name)
       }
     })
+    categories.value = Array.from(categorySet).sort()
     brands.value = Array.from(brandSet).sort()
     shops.value = Array.from(shopSet).sort()
     
@@ -474,6 +504,7 @@ const handleResetFilter = () => {
     filters[key] = null
   })
   // 重置数组类型和枚举型字段
+  filters.include_categories = []
   filters.exclude_brands = []
   filters.exclude_shops = []
   filters.listed_at_period = null
@@ -545,6 +576,7 @@ const handleExport = async () => {
     if (filters.ad_rank_max !== null && filters.ad_rank_max !== '') params.max_ad_rank = filters.ad_rank_max
     if (filters.stock !== null && filters.stock !== '') params.has_stock = filters.stock === 'in_stock'
     if (filters.listed_at_period) params.listed_at_period = filters.listed_at_period
+    if (filters.include_categories && filters.include_categories.length > 0) params.include_categories = filters.include_categories
     if (filters.exclude_brands && filters.exclude_brands.length > 0) params.exclude_brands = filters.exclude_brands
     if (filters.exclude_shops && filters.exclude_shops.length > 0) params.exclude_shops = filters.exclude_shops
 
