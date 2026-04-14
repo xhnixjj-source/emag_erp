@@ -170,9 +170,10 @@
         v-model:current-page="page"
         v-model:page-size="pageSize"
         :total="total"
+        :page-sizes="[100, 200, 300]"
         @current-change="loadProducts"
         @size-change="loadProducts"
-        layout="total, prev, pager, next"
+        layout="total, sizes, prev, pager, next, jumper"
         style="margin-top: 20px; flex-shrink: 0;"
       />
     </el-card>
@@ -274,7 +275,7 @@ const triggering = ref(false)
 const products = ref([])
 const selectedProducts = ref([])
 const page = ref(1)
-const pageSize = ref(20)
+const pageSize = ref(100)
 const total = ref(0)
 const movingToProfit = ref(false)
 const batchRemoving = ref(false)
