@@ -284,6 +284,24 @@ class FilterCountResponse(BaseModel):
     """Filter count response model"""
     count: int
 
+
+@router.get("/categories")
+async def get_filter_pool_categories(
+    current_user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """获取筛选池全量去重类目列表（不受分页影响）。"""
+    rows = (
+        db.query(FilterPool.category_name)
+        .filter(FilterPool.category_name.isnot(None))
+        .distinct()
+        .order_by(FilterPool.category_name.asc())
+        .all()
+    )
+    categories = [r[0].strip() for r in rows if isinstance(r[0], str) and r[0].strip()]
+    return {"categories": categories}
+
+
 @router.get("", response_model=FilterPoolListResponse)
 async def get_filter_pool(
     request: Request,

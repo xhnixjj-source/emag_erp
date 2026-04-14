@@ -377,6 +377,16 @@ const formatDateTime = (value) => {
   }
 }
 
+const loadCategories = async () => {
+  try {
+    const response = await filterPoolApi.getCategories()
+    categories.value = Array.isArray(response.categories) ? response.categories : []
+  } catch (error) {
+    categories.value = []
+    ElMessage.error('加载类目列表失败')
+  }
+}
+
 const loadProducts = async () => {
   loading.value = true
   try {
@@ -447,14 +457,10 @@ const loadProducts = async () => {
     products.value = response.data || response.items || []
     total.value = response.total || 0
 
-    // 根据当前筛选结果动态生成可用类目、品牌和店铺列表
+    // 根据当前筛选结果动态生成可用品牌和店铺列表
     const brandSet = new Set()
     const shopSet = new Set()
-    const categorySet = new Set()
     products.value.forEach(p => {
-      if (p && p.category_name) {
-        categorySet.add(p.category_name)
-      }
       if (p && p.brand) {
         brandSet.add(p.brand)
       }
@@ -462,7 +468,6 @@ const loadProducts = async () => {
         shopSet.add(p.shop_name)
       }
     })
-    categories.value = Array.from(categorySet).sort()
     brands.value = Array.from(brandSet).sort()
     shops.value = Array.from(shopSet).sort()
     
@@ -621,6 +626,7 @@ watch(showHistoryDialog, (val) => {
 })
 
 onMounted(() => {
+  loadCategories()
   loadProducts()
 })
 </script>
